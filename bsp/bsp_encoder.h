@@ -20,4 +20,6 @@ void Encoder_Init(void);
 EncoderEvent_t Encoder_GetEvent(void);
 void Encoder_Process(void);
 
+extern volatile uint32_t g_last_input_ms;  /* 最后输入时间(ms), 供熄屏计时 */
+
 #endif /* __ENCODER_H */

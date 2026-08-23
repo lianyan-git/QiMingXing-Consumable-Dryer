@@ -28,7 +28,7 @@ Objects/
 *.log
 .eide/log
 
-# ---- Keil 命令行构建日志 ----
+# ---- Keil 命令行构建日�?----
 build_log.txt
 
 # ---- misc ----

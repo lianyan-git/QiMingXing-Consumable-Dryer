@@ -2,18 +2,24 @@
 #include "bsp_ntc.h"
 #include "pin_config.h"
 #include "stm32f10x.h"
+#include <math.h>
 
-// NTC: 100kΩ, B=3950, 10kΩ 上拉�?3.3V
-// ADC_mV = 3300 * Rntc / (Rntc + 10000)
-// 温度范围: -20°C ~ 120°C, 步进 5°C
-static const int16_t ntc_lut[] = {
-    3270, 3252, 3232, 3210, 3190,
-    3168, 3142, 3112, 3078, 3000,
-    2932, 2860, 2780, 2692, 2596,
-    2494, 2386, 2274, 2160, 2044,
-    1928, 1814, 1702, 1594, 1490,
-    1392, 1298, 1210, 1130
-};
+/* 100K/B3950 NTC + 10K? ??? 3.3V
+ * ???V_REF(ADC??) = V_pullup(????) = 3.3V ? ??? V ??
+ * ADC = Rntc * 4095 / (Rntc + 10000)?? VREF ??
+ * Rntc = 10000 * ADC / (4095 - ADC)
+ * ??? B ???????????? LUT ???? VREFINT */
+
+static uint16_t adc_read_channel(uint8_t ch)
+{
+    volatile uint32_t guard = 0;
+    ADC_RegularChannelConfig(ADC1, ch, 1, ADC_SampleTime_239Cycles5);
+    ADC_SoftwareStartConvCmd(ADC1, ENABLE);
+    while (!ADC_GetFlagStatus(ADC1, ADC_FLAG_EOC)) {
+        if (++guard > 100000U) return 0;
+    }
+    return ADC_GetConversionValue(ADC1);
+}
 
 void NTC_Init(void)
 {
@@ -37,47 +43,43 @@ void NTC_Init(void)
     adc.ADC_NbrOfChannel = 1;
     ADC_Init(ADC1, &adc);
 
-    ADC_RegularChannelConfig(ADC1, ADC_Channel_2, 1, ADC_SampleTime_55Cycles5);
-
     ADC_Cmd(ADC1, ENABLE);
     ADC_ResetCalibration(ADC1);
     while (ADC_GetResetCalibrationStatus(ADC1));
     ADC_StartCalibration(ADC1);
     while (ADC_GetCalibrationStatus(ADC1));
+
+    adc_read_channel(ADC_Channel_2);   /* ?????? */
 }
 
 uint16_t NTC_ReadADC(void)
 {
-    volatile uint32_t guard = 0;
-    ADC_RegularChannelConfig(ADC1, ADC_Channel_2, 1, ADC_SampleTime_55Cycles5);
-    ADC_SoftwareStartConvCmd(ADC1, ENABLE);
-    while (!ADC_GetFlagStatus(ADC1, ADC_FLAG_EOC)) {
-        if (++guard > 100000U) return 0;   /* ???????????? */
-    }
-    return ADC_GetConversionValue(ADC1);
+    return adc_read_channel(ADC_Channel_2);
 }
 
 int16_t NTC_GetTemperature(void)
 {
-    uint16_t adc_val = NTC_ReadADC();
-    uint16_t adc_mv = (uint32_t)adc_val * 3300 / 4096;
-    uint16_t index;
+    /* ?????????? ADC ?? */
+    uint32_t sum = 0;
+    for (int i = 0; i < 8; i++) sum += adc_read_channel(ADC_Channel_2);
+    uint16_t adc = (uint16_t)(sum / 8);
 
-    if (adc_mv >= ntc_lut[0]) return -200;
-    if (adc_mv <= ntc_lut[28]) return 1200;
+    if (adc >= 4090) return -200;
+    if (adc <= 10)   return 1200;
 
-    for (index = 0; index < sizeof(ntc_lut)/sizeof(ntc_lut[0]) - 1; index++) {
-        if (adc_mv >= ntc_lut[index + 1] && adc_mv <= ntc_lut[index]) {
-            int16_t temp = (int16_t)(index * 5) - 200;
-            uint16_t range = ntc_lut[index] - ntc_lut[index + 1];
-            if (range > 0) {
-                uint16_t frac = (adc_mv - ntc_lut[index + 1]) * 50 / range;
-                temp += (int16_t)frac;
-            }
-            return temp;
-        }
-    }
-    return 1200;
+    float R = 10000.0f * (float)adc / (4095.0f - (float)adc);
+    float invT = 1.0f / 298.15f + (1.0f / 3950.0f) * logf(R / 100000.0f);
+    float tempC = 1.0f / invT - 273.15f;
+
+    if (tempC < -40.0f) tempC = -40.0f;
+    if (tempC > 125.0f) tempC = 125.0f;
+
+    /* ?????????? 25%???? 75%????? */
+    static float filtered = -999.0f;
+    if (filtered < -100.0f) filtered = tempC;   /* ?????? */
+    else filtered = filtered * 0.75f + tempC * 0.25f;
+
+    return (int16_t)(filtered * 10.0f);
 }
 
 uint8_t NTC_IsOverTemp(void)
@@ -85,5 +87,4 @@ uint8_t NTC_IsOverTemp(void)
     int16_t temp = NTC_GetTemperature();
     return (temp >= (int16_t)(NTC_OVERTEMP_THRESHOLD * 10)) ? 1 : 0;
 }
-#endif /* BOOTLOADER_BUILD */
-
+#endif

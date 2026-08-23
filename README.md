@@ -1,6 +1,21 @@
-# 启明星耗材烘干箱固件（STM32F103C8T6）
+# 启明星耗材烘干箱固件（STM32F103C8T6 / CBT6）
 
-基于 STM32F103C8T6 + ESP-01S 的耗材烘干箱固件，分为 **Bootloader（OTA 无线升级引导）** 与 **App（烘干控制逻辑）** 两部分。
+基于 STM32F103C8T6（可直换 CBT6）+ ESP-01S 的耗材烘干箱固件，分为 **Bootloader（OTA 无线升级引导）** 与 **App（烘干控制逻辑）** 两部分。
+
+## 主控选型说明（C8T6 → CBT6）
+
+> **C8T6 与 CBT6 同为 medium-density（MD）系列**（64 KiB / 128 KiB Flash，20 KiB RAM，48 引脚 LQFP）。
+> 已将主控切换到 **CBT6（128 KiB）**：
+> - 启动文件：均为 `startup_stm32f10x_md.s`，不变
+> - 编译宏：均为 `STM32F10X_MD`，不变
+> - **向量表偏移 `VECT_TAB_OFFSET=0x3400` 不变**（App 起点仍是 `0x08003400`，由 Flash 分区绝对地址决定，与芯片 Flash 容量无关）
+> - Flash 分区已按 128 KiB 扩容：`PLATFORM_FLASH_SIZE=0x20000`、`PLATFORM_APP_SIZE=0x1CC00`（115 KiB，占满芯片）、`PLATFORM_FIRMWARE_ERASE_SIZE=0x1D000`；
+>   `PLATFORM_APP_END == PLATFORM_FLASH_END` 断言继续成立
+> - IROM：Bootloader `0x08000000`（12 KiB）、App `0x08003400`（115 KiB）；SRAM 20 KiB 不变
+>
+> 同步改动路径：`shared/platform_contract.h`、`project/MDK(V5)/.eide/eide.yml`（及根 `.eide/eide.yml`）的 App IROM size、
+> `scripts/configure_keil_targets.py`（App size、128 KiB 下载算法校验）。
+> Keil 侧使用方式：MDK Options for Target → Device 选 **STM32F103CB**；若用 `configure_keil_targets.py` 生成工程会自动带 128 KiB 算法。
 
 ## 项目特性
 
@@ -36,15 +51,15 @@
 └── project/MDK(V5)/  EIDE/Keil 工程文件
 ```
 
-## Flash 分区布局（内部 Flash，64 KiB）
+## Flash 分区布局（内部 Flash，128 KiB）
 
-STM32F103C8T6 内部 Flash 共 64 KiB，地址范围 `0x08000000` ~ `0x0800FFFF`。布局如下：
+主控 STM32F103CBT6，内部 Flash 共 128 KiB，地址范围 `0x08000000` ~ `0x0801FFFF`（C8T6 64 KiB 时 App 段溢出版本需回缩 `PLATFORM_APP_SIZE`；当前项目固定按 CBT6）。布局如下：
 
 | 区间 | 地址 | 分区大小 | 当前固件 | 说明 |
 |---|---|---|---|---|
 | Bootloader | `0x08000000` | 12 KiB（`0x3000`） | ~11.4 KiB | ESP 网页 OTA 升级引导 |
 | 升级标志 | `0x08003000` | 1 KiB（`0x400`） | - | 升级请求标志 + 版本信息 |
-| App | `0x08003400` | 51 KiB（`0xCC00`） | - | 烘干控制固件（WiFi 参数已交给 ESP01S 存储，分区并入 App） |
+| App | `0x08003400` | 115 KiB（`0x1CC00`） | - | 烘干控制固件（WiFi 参数已交给 ESP01S 存储，分区并入 App） |
 
 分区校验（编译期静态断言）：
 - Bootloader 结束 = 标志区起始 ✓
@@ -191,6 +206,23 @@ A: 确认已烧录**自定义 ESP-01S 固件**（`QiMingXing-ESP01S` 仓库）�
 A: 确认背光引脚（PB0）配置为推挽输出并置高。若硬件上背光 MOS 已拆除，需检查背光有没有3.3V
 
 ## 更新日志
+
+### 2026-08-24
+
+#### 变更（主控换 CBT6 + 分区扩容）
+- **主控切换 STM32F103CBT6（128 KiB）**：C8/CB 同为 medium-density，启动文件/宏/`VECT_TAB_OFFSET=0x3400` 均不变；App 分区由 51 KiB 扩容至 **115 KiB（`0x1CC00`）**，占满 128 KiB（`PLATFORM_FLASH_SIZE=0x20000`）；同步 `project/MDK(V5)/.eide/eide.yml`、根 `.eide/eide.yml`、`scripts/configure_keil_targets.py`（App size + 128 KiB 下载算法 `-FL020000` 校验）
+- **WS2812 位冲重写（硬 NOP 时序）**：原 SysTick/DWT 循环延时含函数调用开销，0 码高电平实超 380ns → 全白。改用 `NOP16/NOP44/NOP58` 宏展开（每 NOP 精确 1 周期），0 码高 ~278ns / 1 码高 ~667ns；灯效：空闲彩色渐变平滑流动、烘干进度条已完成部分呼吸灯、PB6 状态灯（空闲灭/烘干红/完成绿 30s）、设置"灯光开关"控制两条灯条
+- **烘干控制重构（双 PID）**：AHT20 空气温度为主控维持设定温度（PID 输出 PTC 功率），NTC 加热器温度由第二个 PID 限制在 `ptc_max_temp` 内（NTC 到上限自动压功率）；加热阶段 AHT20 达目标才开始倒计时
+- **风扇恒全功率**：删除 `update_fan_for_ptc` 调速算法，烘干/校准全程 100%
+- **开机安全机制**：进度条期间读取 AHT20/NTC，NTC 高于冷却温度自动开风扇散热；冷却温度仅检测 NTC
+
+#### 修复
+- **NTC 温度计算**：改为 ADC 原始值直接反算（含 8 次采样平均 + EMA 滤波），消除 LUT/VREF 偏差；实测 70°C 假读为接线虚焊，修后室温正常
+- **RGB 全白**：0 码高电平总时长（含延时函数开销）超 380ns → 0 判 1 → 全白，硬 NOP 修复
+- **电机摆动只反转一次**：改为 `osc_dir` 交替正/反转、幅度恒定（由设置角度控制）
+- **TMC2209 电流**：UART 写入 `IHOLD_IRUN`（初始 50→100 风扇、电流 CS=motor_current×18/10），接收加超时防死锁
+- **步进脉冲宽度**：3 NOP 提升至 2µs 级（TMC 需 ≥1µs），避免抖动/复位
+- **AHT20 阻塞缩短**：500k→200k NOP，消除主循环卡顿
 
 ### 2026-08-21
 

@@ -25,7 +25,8 @@ typedef struct {
     uint8_t motor_driver;
     uint8_t motor_current;
     uint8_t motor_stealthchop;
-    uint8_t reserved[7];
+    uint8_t rgb_enabled;
+    uint8_t reserved[6];
 
     uint32_t checksum;
 } SystemParams_t;
@@ -38,7 +39,8 @@ static uint32_t calc_checksum(const SystemParams_t *p)
                  + (uint32_t)(p->pid_ki * 100) + (uint32_t)(p->pid_kd * 100)
                  + p->motor_enabled + p->motor_direction + p->motor_speed
                  + p->motor_oscillate + p->motor_oscillate_angle
-                 + p->motor_driver + p->motor_current + p->motor_stealthchop;
+                 + p->motor_driver + p->motor_current + p->motor_stealthchop
+                 + p->rgb_enabled;
     return ~sum;
 }
 
@@ -97,6 +99,7 @@ void System_LoadParams(void)
         g_sys.params.motor_driver = params.motor_driver;
         g_sys.params.motor_current = params.motor_current;
         g_sys.params.motor_stealthchop = params.motor_stealthchop;
+        g_sys.params.rgb_enabled = params.rgb_enabled;
     }
 }
 
@@ -124,6 +127,7 @@ void System_SaveParams(void)
     params.motor_driver = g_sys.params.motor_driver;
     params.motor_current = g_sys.params.motor_current;
     params.motor_stealthchop = g_sys.params.motor_stealthchop;
+    params.rgb_enabled = g_sys.params.rgb_enabled;
     params.checksum = calc_checksum(&params);
 
     memcpy(raw, &params, sizeof(SystemParams_t));

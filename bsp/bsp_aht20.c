@@ -117,10 +117,10 @@ int AHT20_Init(void)
     if (i2c_write_byte(0x00)) { i2c_stop(); return -1; }
     i2c_stop();
 
-    /* 等待校准完成（最长 ~100ms） */
+    /* 等待校准完成（典型 ~10ms） */
     {
         volatile uint32_t t = 0;
-        for (t = 0; t < 20000; t++) __NOP();
+        for (t = 0; t < 150000; t++) __NOP();
     }
     return 0;
 }
@@ -141,8 +141,8 @@ int AHT20_Read(float *temperature, float *humidity)
     if (i2c_write_byte(0x00)) { i2c_stop(); return -1; }
     i2c_stop();
 
-    /* 等待测量完成（最长 ~100ms） */
-    for (t = 0; t < 30000; t++) __NOP();
+    /* 等待测量完成（典型 ~10ms，最长 ~80ms；72MHz 下 ~200k≈16ms） */
+    for (t = 0; t < 200000; t++) __NOP();
 
     /* 读取 6 字节 */
     i2c_start();

@@ -33,7 +33,7 @@ void Buzzer_Init(void)
 
 void Buzzer_Beep(uint16_t ms)
 {
-    uint16_t pulse = (uint16_t)((uint32_t)g_sys.buzzer_vol * 100U);
+    uint16_t pulse = (uint16_t)((uint32_t)g_sys.buzzer_vol * 50U);  /* 占空比0-50%, 50%最响(压电片需交变才出声) */
     if (pulse > 999) pulse = 999;
     TIM_SetCompare4(TIM3, pulse);
     volatile uint32_t delay = (uint32_t)ms * 7200;

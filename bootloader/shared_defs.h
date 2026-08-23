@@ -11,14 +11,14 @@
 #include "platform_contract.h"
 
 /*═════════════════════════════════════════════════════════════════════════════
- *  内部Flash分区定义 (STM32F103C8T6 = 64KB)
+ *  内部Flash分区定义 (STM32F103CBT6 = 128KB；C8T6 64KB 亦兼容，分区地址不变)
  *═════════════════════════════════════════════════════════════════════════════*/
 
 #define FLASH_BASE_ADDR         PLATFORM_FLASH_BASE
 #define FLASH_PAGE_SIZE         PLATFORM_FLASH_PAGE_SIZE
 #define FLASH_TOTAL_SIZE        PLATFORM_FLASH_SIZE
 
-// Bootloader区: 0x08000000 ~ 0x08003FFF (16KB)
+// Bootloader区: 0x08000000 ~ 0x08002FFF (12KB)
 #define BOOTLOADER_ADDR         PLATFORM_BOOT_ADDR
 #define BOOTLOADER_SIZE         PLATFORM_BOOT_SIZE
 
@@ -26,7 +26,7 @@
 #define FLAG_SECTOR_ADDR        PLATFORM_FLAG_ADDR
 #define FLAG_SECTOR_SIZE        PLATFORM_FLAG_SIZE
 
-// APP主程序区: 0x08003400 ~ 0x0800FFFF (51KB)
+// APP主程序区: 0x08003400 ~ 0x0801FFFF (115KB, CBT6 占满128KB)
 #define APP_ADDR                PLATFORM_APP_ADDR
 #define APP_SIZE                PLATFORM_APP_SIZE
 

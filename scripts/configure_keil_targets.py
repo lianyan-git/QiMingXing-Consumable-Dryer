@@ -53,7 +53,7 @@ TARGETS = {
     },
     "APP": {
         "start": "0x08003400",
-        "size": "0x0000CC00",
+        "size": "0x0001CC00",
         "output": "dryer_app",
         "entry_name": "main.c",
         "entry_path": r"..\..\app\main.c",
@@ -145,7 +145,7 @@ def configure_project():
         set_text(target, ".//Cpu", f'IRAM(0x20000000,0x00005000) IROM({config["start"]},{config["size"]}) CPUTYPE("Cortex-M3") CLOCK(12000000) ELITTLE')
         set_text(target, ".//Define", config["defines"])
         flash_driver = require(target, ".//FlashDriverDll")
-        flash_driver.text = flash_driver.text.replace("-FL020000", "-FL010000")
+        flash_driver.text = flash_driver.text.replace("-FL010000", "-FL020000")
         set_text(target, ".//TargetStatus/InvalidFlash", "0")
         set_text(target, ".//OutputDirectory", f'.\\Objects\\{name}\\')
         set_text(target, ".//OutputName", config["output"])
@@ -186,7 +186,7 @@ def configure_options():
         set_text(target, ".//OPTFL/IsCurrentTarget", "1" if name == "APP" else "0")
         for registry_name in target.findall(".//TargetDriverDllRegistry/SetRegEntry/Name"):
             if registry_name.text:
-                registry_name.text = registry_name.text.replace("-FL020000", "-FL010000")
+                registry_name.text = registry_name.text.replace("-FL010000", "-FL020000")
         root.insert(insertion_index + offset, target)
 
     ET.indent(tree, space="  ")
@@ -250,8 +250,8 @@ def validate_project():
         if "fromelf.exe --bin" not in command or f'{config["output"]}.bin' not in command:
             errors.append(f"{name} BIN after-build command is invalid")
         flash_driver = require(target, ".//FlashDriverDll").text or ""
-        if "-FL010000" not in flash_driver or "-FL020000" in flash_driver:
-            errors.append(f"{name} Flash download range is not 64 KiB")
+        if "-FL020000" not in flash_driver or "-FL010000" in flash_driver:
+            errors.append(f"{name} Flash download range is not 128 KiB")
 
     option_names = [item.text for item in ET.parse(OPTIONS).getroot().findall("./Target/TargetName")]
     if option_names != list(TARGETS):

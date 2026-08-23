@@ -3,6 +3,7 @@
 #include "bsp_cs1237.h"
 #include "bsp_ptc.h"
 #include "bsp_stepper.h"
+#include "bsp_rgb_led.h"
 #include "system_config.h"
 #include "pin_config.h"
 #include "system_time.h"
@@ -31,6 +32,7 @@ void System_SaveParams(void) { }
 void StartDrying(void) { }
 void StopDrying(void) { }
 
+volatile uint32_t g_last_input_ms = 0;  /* 最后输入时间(旋转/按钮), 供 main 熄屏计时 */
 static uint8_t enc_last_ab = 0;
 static int8_t enc_accum = 0;
 static volatile uint32_t btn_down_time = 0;
@@ -45,6 +47,7 @@ static uint32_t enc_last_rot_time = 0;
 static void enc_update_accel(int8_t mag)
 {
     uint32_t now = SystemTime_Millis();
+    g_last_input_ms = now;
     uint32_t dt = now - enc_last_rot_time;
     enc_last_rot_time = now;
 
@@ -92,7 +95,7 @@ EncoderEvent_t Encoder_GetEvent(void)
         enc_accum = 0; enc_update_accel(mag); return ENC_EVT_CCW;
     }
     if (!btn_down && GPIO_ReadInputDataBit(PIN_ENC_BTN_PORT, PIN_ENC_BTN_PIN) == 0) {
-        btn_down = 1; btn_down_time = SystemTime_Millis();
+        btn_down = 1; btn_down_time = SystemTime_Millis(); g_last_input_ms = btn_down_time;
     }
     if (btn_long_flag) { btn_long_flag = 0; return ENC_EVT_LONG_PRESS; }
     if (btn_down && GPIO_ReadInputDataBit(PIN_ENC_BTN_PORT, PIN_ENC_BTN_PIN) == 1) {
@@ -438,7 +441,7 @@ case SCREEN_MAIN:
         break;
 
     case SCREEN_SETTINGS: {
-        uint8_t cnt = 6;
+        uint8_t cnt = 7;
         static uint8_t s_edit = 0;
         if (s_edit) {
             if (evt == ENC_EVT_CW || evt == ENC_EVT_CCW) {
@@ -455,6 +458,11 @@ case SCREEN_MAIN:
                     if (v < 0) v = 0; else if (v > 100) v = 100;
                     g_sys.backlight = (uint8_t)v;
                     TFT_SetBrightness(g_sys.backlight);
+                } else if (g_sys.selected_item == 5) {
+                    /* 熄屏超时 0=从不 1=1s 2=5s 3=10s 4=20s 5=30s 6=60s 7=120s 8=300s */
+                    int16_t v = (int16_t)g_sys.screen_off_timeout + delta;
+                    if (v < 0) v = 0; else if (v > 8) v = 8;
+                    g_sys.screen_off_timeout = (uint8_t)v;
                 }
             } else if (evt == ENC_EVT_CLICK) { s_edit = 0; }
         } else {
@@ -465,12 +473,20 @@ case SCREEN_MAIN:
                 if (g_sys.selected_item >= g_sys.scroll_offset + pp) g_sys.scroll_offset = g_sys.selected_item - pp + 1;
                 if (g_sys.selected_item < g_sys.scroll_offset) g_sys.scroll_offset = g_sys.selected_item;
             } else if (evt == ENC_EVT_CLICK) {
-                if (g_sys.selected_item >= 5) g_sys.current_screen = SCREEN_MENU;
-                else if (g_sys.selected_item == 1 || g_sys.selected_item == 3) { s_edit = 1; }
+                if (g_sys.selected_item >= 6) g_sys.current_screen = SCREEN_MENU;
+                else if (g_sys.selected_item == 1 || g_sys.selected_item == 3 || g_sys.selected_item == 5) { s_edit = 1; }
                 else {
                     switch (g_sys.selected_item) {
                     case 0: g_sys.buzzer_link = !g_sys.buzzer_link; break;
-                    case 2: g_sys.light_switch = !g_sys.light_switch; break;
+                    case 2:
+                        g_sys.light_switch = !g_sys.light_switch;
+                        if (!g_sys.light_switch) {
+                            /* 关灯：立即发 24bit 全零到两个灯条 */
+                            RGB_Status_Off();
+                            uint8_t black[3] = {0, 0, 0};
+                            RGB_Strip3_SetPixels(black, 1);
+                        }
+                        break;
                     case 4: g_sys.theme = !g_sys.theme; theme_apply(); UI_DrawSettingsScreen(); break;
                     default: break;
                     }

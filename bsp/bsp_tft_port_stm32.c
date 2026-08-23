@@ -65,7 +65,10 @@ void Backlight_Init(void)
 /* 设置背光亮度 0-100（PWM 占空比） */
 void TFT_SetBrightness(uint8_t pct)
 {
-    uint16_t pulse = (uint16_t)((uint32_t)pct * 10U);
+    if (pct > 100U) pct = 100U;
+    /* gamma2 校正：LED 视觉非线性，低亮度段更敏感。
+     * pulse = pct²/10，pct=100→1000(100%), 50→250(25%), 20→40(4%)明显变暗 */
+    uint16_t pulse = (uint16_t)(((uint32_t)pct * pct) / 10U);
     if (pulse > 999) pulse = 999;
     TIM_SetCompare3(TIM3, pulse);
 }

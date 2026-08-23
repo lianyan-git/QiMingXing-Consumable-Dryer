@@ -13,5 +13,6 @@ void RGB_Status_Off(void);
 
 void RGB_Progress_Rainbow(void);
 void RGB_Progress_ColorWheel(uint8_t pos);
+void RGB_Progress_DryingBar(uint8_t percent);
 
 #endif

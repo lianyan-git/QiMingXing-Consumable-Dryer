@@ -58,7 +58,7 @@ void PTC_SetPower(uint8_t percent)
 
 void PTC_PID_AutotuneStart(void)
 {
-    PTC_PID_AutotuneStartWithFan(50);
+    PTC_PID_AutotuneStartWithFan(100);   /* 风扇恒全功率 */
 }
 
 void PTC_PID_AutotuneStartWithFan(uint8_t fan_pct)

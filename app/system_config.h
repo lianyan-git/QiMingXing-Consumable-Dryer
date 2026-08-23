@@ -101,6 +101,7 @@ typedef struct {
     uint8_t motor_driver;
     uint8_t motor_current;            // x100 (0.2-0.6A)
     uint8_t motor_stealthchop;
+    uint8_t rgb_enabled;              // RGB灯条总开关 1=开 0=关
 } Params_t;
 
 typedef struct {
@@ -154,6 +155,7 @@ typedef struct {
     uint8_t backlight;      /* 0-100 */
     uint8_t theme;          /* 0=亮色 1=暗色 */
     uint8_t scroll_offset;  /* 翻页滚动偏移 */
+    uint8_t screen_off_timeout; /* 熄屏超时索引: 0=从不 1=1s 2=5s 3=10s 4=20s 5=30s 6=60s 7=120s 8=300s */
 } SystemState_t;
 
 extern SystemState_t g_sys;
