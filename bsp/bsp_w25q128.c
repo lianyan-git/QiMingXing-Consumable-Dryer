@@ -299,3 +299,44 @@ W25Q128_Status_t W25Q128_EraseRange(uint32_t address, uint32_t length)
     }
     return W25Q128_OK;
 }
+
+/* 非阻塞保存原语：只发命令不等待（配合外部轮询 ReadSR1）。
+ * 每次只占用 SPI1 极短时间，可在后台与 TFT 刷新交错执行。 */
+W25Q128_Status_t W25Q128_StartEraseSector(uint32_t address)
+{
+    W25Q128_Status_t result;
+
+    if (((address & (W25Q128_SECTOR_SIZE - 1U)) != 0U) ||
+        !range_is_valid(address, W25Q128_SECTOR_SIZE)) {
+        return W25Q128_ERROR_RANGE;
+    }
+    if (Spi1Bus_Acquire(SPI1_BUS_OWNER_W25Q128, 0U) != SPI1_BUS_OK) {
+        return W25Q128_ERROR_BUS;   /* TFT 正在使用总线，稍后再试 */
+    }
+    result = write_enable();
+    if (result == W25Q128_OK) {
+        result = send_addressed_command(W25_CMD_SECTOR_ERASE, address, 0, 0, 0U);
+    }
+    Spi1Bus_Release(SPI1_BUS_OWNER_W25Q128);
+    return result;
+}
+
+W25Q128_Status_t W25Q128_StartWritePage(uint32_t address, const uint8_t *buffer, uint32_t length)
+{
+    W25Q128_Status_t result = W25Q128_OK;
+
+    if (((address & (W25Q128_PAGE_SIZE - 1U)) != 0U) ||
+        (buffer == 0) || (length == 0U) || (length > W25Q128_PAGE_SIZE) ||
+        !range_is_valid(address, length)) {
+        return W25Q128_ERROR_ARGUMENT;
+    }
+    if (Spi1Bus_Acquire(SPI1_BUS_OWNER_W25Q128, 0U) != SPI1_BUS_OK) {
+        return W25Q128_ERROR_BUS;
+    }
+    result = write_enable();
+    if (result == W25Q128_OK) {
+        result = send_addressed_command(W25_CMD_PAGE_PROGRAM, address, buffer, 0, length);
+    }
+    Spi1Bus_Release(SPI1_BUS_OWNER_W25Q128);
+    return result;
+}

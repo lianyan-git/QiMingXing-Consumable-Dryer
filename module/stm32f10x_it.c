@@ -137,9 +137,14 @@ void PendSV_Handler(void)
   * @param  None
   * @retval None
   */
+/* APP 构建由 bsp_encoder.c 提供强定义（1kHz 采样相位不丢失）；
+ * Bootloader 无编码器需求，用弱空实现避免链接缺失。 */
+__attribute__((weak)) void Encoder_TickISR(void) { }
+
 void SysTick_Handler(void)
 {
   SystemTime_TickISR();
+  Encoder_TickISR();
 }
 
 /******************************************************************************/

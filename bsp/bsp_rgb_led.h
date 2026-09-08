@@ -10,6 +10,7 @@ void RGB_Strip3_SetPixels(uint8_t *data, uint16_t num);
 void RGB_Status_Red(void);
 void RGB_Status_Green(void);
 void RGB_Status_Off(void);
+void RGB_AllOff(void);
 
 void RGB_Progress_Rainbow(void);
 void RGB_Progress_ColorWheel(uint8_t pos);

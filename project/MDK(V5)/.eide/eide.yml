@@ -114,6 +114,12 @@ virtualFolder:
         - path: ../../bsp/bsp_tft_port.h
         - path: ../../bsp/bsp_tft_st7789.h
         - path: ../../bsp/bsp_w25q128.h
+        - path: ../../bsp/sfud.c
+        - path: ../../bsp/sfud.h
+        - path: ../../bsp/sfud_cfg.h
+        - path: ../../bsp/sfud_def.h
+        - path: ../../bsp/sfud_flash_def.h
+        - path: ../../bsp/sfud_port.c
       folders: []
     - name: StdPeriph
       files:

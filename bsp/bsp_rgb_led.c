@@ -1,6 +1,7 @@
 #ifndef BOOTLOADER_BUILD
 #include "bsp_rgb_led.h"
 #include "pin_config.h"
+#include "system_config.h"
 #include "stm32f10x.h"
 
 static uint8_t strip2_buf[24];
@@ -38,7 +39,7 @@ static void ws2812_send_byte(uint8_t byte, GPIO_TypeDef *port, uint16_t pin)
 
 static void ws2812_send_pixels(uint8_t *data, uint16_t num, GPIO_TypeDef *port, uint16_t pin)
 {
-    uint32_t d;
+    volatile uint32_t d;   /* volatile：防止 -O2/-Os 把复位空循环优化掉导致时序失效 */
     __disable_irq();
     port->BRR = pin;
     for (d = 0; d < 6000; d++);           /* 复位 ~80µs */
@@ -65,19 +66,20 @@ static void hsv_to_rgb(uint8_t hue, uint8_t *r, uint8_t *g, uint8_t *b)
     }
 }
 
-/* ── 呼吸灯正弦表：一周期 32 点，值 0..1059（亮度 0..108） ── */
+/* ── 呼吸灯标准正弦表：一周期 32 点，值 0..1024（(1+sin)/2*1024），平滑无突变 ── */
 static const uint16_t breath_sin[32] = {
-    512,609,703,792,873,942,997,1036,1058,1062,1058,1036,997,942,873,792,
-    703,609,512,415,321,232,151,82,27,0,0,27,82,151,232,321
+    512,612,708,797,874,938,985,1014,1024,1014,985,938,874,797,708,612,
+    512,419,316,227,150,86,39,10,0,10,39,86,150,227,316,419
 };
 static uint8_t breath_idx = 0;
 
-/* 当前呼吸亮度：18..108，平滑正弦升降。每 200ms 步进 2 → 约 3.2s 一个呼吸周期 */
+/* 当前呼吸亮度：18..92，正弦平滑升降。每 200ms 步进 1（32 帧 ≈ 6.4s 一个呼吸周期），
+ * 相邻帧亮度差小 → 平滑无突变 */
 static uint8_t breath_brightness(void)
 {
     uint16_t f = breath_sin[breath_idx];
-    breath_idx = (uint8_t)((breath_idx + 2) & 31);
-    return (uint8_t)(18 + (uint16_t)(f * 90) / 1024);
+    breath_idx = (uint8_t)((breath_idx + 1) & 31);
+    return (uint8_t)(18 + (uint16_t)(f * 74) / 1024);
 }
 
 void RGB_Strip_Init(void)
@@ -97,17 +99,25 @@ void RGB_Strip_Init(void)
     ws2812_send_pixels(black, 7, PIN_RGB3_PORT, PIN_RGB3_PIN);
 }
 
+static uint8_t rgb_scale(uint8_t c, uint8_t bright)
+{
+    if (bright >= 100) return c;
+    return (uint8_t)(((uint16_t)c * (uint16_t)bright) / 100U);
+}
+
 void RGB_Strip2_SetPixels(uint8_t *data, uint16_t num)
 {
     uint16_t total = (num > 8) ? 8 : num;
-    for (uint16_t i = 0; i < total * 3; i++) strip2_buf[i] = data[i];
+    uint8_t b = g_sys.params.rgb_led_bright;
+    for (uint16_t i = 0; i < total * 3; i++) strip2_buf[i] = rgb_scale(data[i], b);
     ws2812_send_pixels(strip2_buf, total, PIN_RGB2_PORT, PIN_RGB2_PIN);
 }
 
 void RGB_Strip3_SetPixels(uint8_t *data, uint16_t num)
 {
     uint16_t total = (num > 8) ? 8 : num;
-    for (uint16_t i = 0; i < total * 3; i++) strip3_buf[i] = data[i];
+    uint8_t b = g_sys.params.rgb_strip_bright;
+    for (uint16_t i = 0; i < total * 3; i++) strip3_buf[i] = rgb_scale(data[i], b);
     ws2812_send_pixels(strip3_buf, total, PIN_RGB3_PORT, PIN_RGB3_PIN);
 }
 
@@ -115,26 +125,34 @@ void RGB_Status_Red(void)   { uint8_t d[3]={0,64,0};  RGB_Strip2_SetPixels(d, 1)
 void RGB_Status_Green(void) { uint8_t d[3]={64,0,0};  RGB_Strip2_SetPixels(d, 1); }
 void RGB_Status_Off(void)   { uint8_t d[3]={0,0,0};   RGB_Strip2_SetPixels(d, 1); }
 
+/* 全灭：状态条 + 进度条的所有 LED 发全零（关灯命令，8 颗上限全部覆盖） */
+void RGB_AllOff(void)
+{
+    uint8_t black[24] = {0};
+    RGB_Strip2_SetPixels(black, 8);
+    RGB_Strip3_SetPixels(black, 8);
+}
+
 void RGB_Progress_Rainbow(void)
 {
     uint8_t data[21];
-    /* 彩色平滑流动：7 颗灯为连续渐变色（相邻间隔16，跨度96），
-     * 整体色相每次 +2 慢速流动 → 如呼吸般平滑，无人眼可感的跳变 */
+    /* 彩色平滑流动：7 颗灯连续渐变（相邻色相间隔12，跨度72→过渡更柔和不生硬），
+     * 整体色相每帧 +10 快速流动 */
     for (int i = 0; i < 7; i++) {
-        uint8_t hue = (uint8_t)(rainbow_pos + i * 16);
+        uint8_t hue = (uint8_t)(rainbow_pos + i * 12);
         uint8_t r, g, b;
         hsv_to_rgb(hue, &r, &g, &b);
         data[i*3]=g>>2; data[i*3+1]=r>>2; data[i*3+2]=b>>2;
     }
     RGB_Strip3_SetPixels(data, 7);
-    rainbow_pos += 4;   /* 步进 4：渐变带流动更快（64 帧 × 0.2s ≈ 12.8s 一圈） */
+    rainbow_pos += 4;   /* 步进 4：渐变带流动慢一点（64帧×0.2s≈12.8s 一圈） */
 }
 
 void RGB_Progress_ColorWheel(uint8_t pos)
 {
     uint8_t data[21];
     for (int i = 0; i < 7; i++) {
-        uint8_t hue = (pos + i * 36) % 256;
+        uint8_t hue = (pos + i * 18) % 256;
         uint8_t r, g, b;
         hsv_to_rgb(hue, &r, &g, &b);
         data[i*3]=g>>2; data[i*3+1]=r>>2; data[i*3+2]=b>>2;
@@ -142,25 +160,30 @@ void RGB_Progress_ColorWheel(uint8_t pos)
     RGB_Strip3_SetPixels(data, 7);
 }
 
+static uint8_t breath_hue = 0;   /* 彩色循环相位（呼吸循环色） */
+
 void RGB_Progress_DryingBar(uint8_t percent)
 {
     uint8_t data[21];
     uint8_t leds_on = (uint8_t)((uint16_t)percent * 7U / 100U);
-    uint8_t bri = breath_brightness();   /* 正弦平滑呼吸：18..108 */
+    uint8_t bri = breath_brightness();   /* 正弦呼吸亮度：18..108 */
+    uint8_t r, g, b;
     if (leds_on > 7) leds_on = 7;
 
+    /* 已完成部分统一用一种颜色，颜色在色环上缓慢循环 + 整条呼吸 */
+    hsv_to_rgb(breath_hue, &r, &g, &b);
+
     for (uint8_t i = 0; i < 7; i++) {
-        uint8_t r, g, b;
-        if (i < leds_on) {           /* 已完成部分：亮起 + 平滑呼吸 */
-            uint8_t hue = (uint8_t)((uint16_t)(6-i)*85U/6U);
-            hsv_to_rgb(hue, &r, &g, &b);
+        if (i >= 7 - leds_on) {      /* 从最后一颗倒序点亮：第7颗=第一个14% */
             data[i*3]   = (uint8_t)((uint16_t)(g>>2) * bri / 64);
             data[i*3+1] = (uint8_t)((uint16_t)(r>>2) * bri / 64);
             data[i*3+2] = (uint8_t)((uint16_t)(b>>2) * bri / 64);
-        } else {
+        } else {                     /* 未完成部分：灭 */
             data[i*3]=0; data[i*3+1]=0; data[i*3+2]=0;
         }
     }
     RGB_Strip3_SetPixels(data, 7);
+
+    breath_hue += 2;   /* 彩色循环：128帧×0.2s≈25.6s 完整一圈，过渡更舒缓 */
 }
 #endif

@@ -10,5 +10,6 @@ void Stepper_Move(int32_t steps);
 void Stepper_SetOscillate(int32_t steps);
 void Stepper_Update(void);
 uint8_t Stepper_IsRunning(void);
+uint8_t Stepper_TmcComOk(void);
 
 #endif /* __STEPPER_MOTOR_H */

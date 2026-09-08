@@ -412,8 +412,9 @@ TftStatus_t TFT_DrawStringZh(uint16_t x, uint16_t y, const char *text,
                 if (result != TFT_OK) return result;
                 for (r = 0U; r < 16U; r++) {
                     for (c = 0U; c < 16U; c++) {
+                        /* 字模为阴码：位=0 是笔画，位=1 是背景 */
                         if ((zh16_data[idx][r * 2U + (c >> 3)] &
-                             (uint8_t)(0x80U >> (c & 7U))) != 0U) {
+                             (uint8_t)(0x80U >> (c & 7U))) == 0U) {
                             result = TFT_FillRect((uint16_t)(x + c),
                                                   (uint16_t)(y + r), 1U, 1U, color);
                             if (result != TFT_OK) return result;
@@ -430,7 +431,9 @@ TftStatus_t TFT_DrawStringZh(uint16_t x, uint16_t y, const char *text,
             x = (uint16_t)(x + 17U);
             text += 3;
         } else {
-            result = TFT_DrawChar(x, y, *text, color, background, 1);
+            /* ASCII：scale2(12×16) 与中文同高，16px 格内水平居中，顶部对齐 */
+            TFT_FillRect(x, y, 16U, 16U, background);
+            result = TFT_DrawChar((uint16_t)(x + 2U), y, *text, color, background, 2);
             if (result != TFT_OK) return result;
             x = (uint16_t)(x + 16U);
             ++text;

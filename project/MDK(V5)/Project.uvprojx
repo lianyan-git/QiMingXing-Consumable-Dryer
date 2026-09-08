@@ -1,4 +1,4 @@
-<?xml version='1.0' encoding='UTF-8'?>
+﻿<?xml version='1.0' encoding='UTF-8'?>
 <Project xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="project_projx.xsd">
   <SchemaVersion>2.1</SchemaVersion>
   <Header>### uVision Project, (C) Keil Software</Header>
@@ -477,6 +477,16 @@
               <FilePath>..\..\bsp\bsp_w25q128.c</FilePath>
             </File>
             <File>
+              <FileName>sfud.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\bsp\sfud.c</FilePath>
+            </File>
+            <File>
+              <FileName>sfud_port.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\bsp\sfud_port.c</FilePath>
+            </File>
+            <File>
               <FileName>bsp_tft_st7789.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\..\bsp\bsp_tft_st7789.c</FilePath>
@@ -806,7 +816,7 @@
               <IROM>
                 <Type>1</Type>
                 <StartAddress>0x08003400</StartAddress>
-                <Size>0x0000CC00</Size>
+                <Size>0x0001CC00</Size>
               </IROM>
               <XRAM>
                 <Type>0</Type>
@@ -831,7 +841,7 @@
               <OCR_RVCT4>
                 <Type>1</Type>
                 <StartAddress>0x08003400</StartAddress>
-                <Size>0x0000CC00</Size>
+                <Size>0x0001CC00</Size>
               </OCR_RVCT4>
               <OCR_RVCT5>
                 <Type>1</Type>
@@ -868,7 +878,7 @@
           </ArmAdsMisc>
           <Cads>
             <interw>1</interw>
-            <Optim>1</Optim>
+            <Optim>0</Optim>
             <oTime>0</oTime>
             <SplitLS>0</SplitLS>
             <OneElfS>1</OneElfS>
@@ -922,7 +932,7 @@
             <noStLib>0</noStLib>
             <RepFail>1</RepFail>
             <useFile>0</useFile>
-            <TextAddressRange>0x08005000</TextAddressRange>
+            <TextAddressRange>0x08003400</TextAddressRange>
             <DataAddressRange>0x20000000</DataAddressRange>
             <pXoBase />
             <ScatterFile />
@@ -1082,6 +1092,16 @@
               <FileName>bsp_w25q128.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\..\bsp\bsp_w25q128.c</FilePath>
+            </File>
+            <File>
+              <FileName>sfud.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\bsp\sfud.c</FilePath>
+            </File>
+            <File>
+              <FileName>sfud_port.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\bsp\sfud_port.c</FilePath>
             </File>
             <File>
               <FileName>bsp_tft_st7789.c</FileName>

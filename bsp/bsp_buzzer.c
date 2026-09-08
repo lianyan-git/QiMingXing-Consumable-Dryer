@@ -4,6 +4,10 @@
 #include "system_config.h"
 #include "stm32f10x.h"
 
+/* 载波 2kHz（此前 4kHz 实测偏小声，压电片共振更低；2kHz 体积响亮且低音量有 2 个载波周期/ms 不刺耳） */
+#define BZ_PERIOD  499U   /* 72MHz/72 = 1MHz, 1MHz/500 = 2kHz */
+#define BZ_HALF    250U
+
 void Buzzer_Init(void)
 {
     GPIO_InitTypeDef g;
@@ -16,7 +20,7 @@ void Buzzer_Init(void)
 
     TIM_TimeBaseInitTypeDef t;
     t.TIM_Prescaler = 71;
-    t.TIM_Period = 999;
+    t.TIM_Period = BZ_PERIOD;
     t.TIM_ClockDivision = 0;
     t.TIM_CounterMode = TIM_CounterMode_Up;
     TIM_TimeBaseInit(TIM3, &t);
@@ -33,11 +37,31 @@ void Buzzer_Init(void)
 
 void Buzzer_Beep(uint16_t ms)
 {
-    uint16_t pulse = (uint16_t)((uint32_t)g_sys.buzzer_vol * 50U);  /* 占空比0-50%, 50%最响(压电片需交变才出声) */
-    if (pulse > 999) pulse = 999;
-    TIM_SetCompare4(TIM3, pulse);
-    volatile uint32_t delay = (uint32_t)ms * 7200;
-    while (delay--) { __NOP(); }
+    /* 音量=包络门控：固定 50% 占空比方波（振幅恒定→音色/频率不变），
+     * 4kHz 载波在压电片共振点→最大音量；低音量时 1ms 含 4 个载波周期→不刺耳。
+     * 每 10ms(100Hz) 周期内导通 vol*1ms → 占空比=vol/10 决定响度。 */
+    uint32_t on_us  = (uint32_t)g_sys.buzzer_vol * 1000U;
+    uint32_t cycle  = 10000U;
+    uint32_t remain = (uint32_t)ms * 1000U;
+
+    if (on_us == 0U) {
+        { volatile uint32_t d = remain * 7U; while (d--) __NOP(); }
+        TIM_SetCompare4(TIM3, 0);
+        return;
+    }
+    while (remain > 0) {
+        uint32_t on = (on_us < remain) ? on_us : remain;
+        TIM_SetCompare4(TIM3, BZ_HALF);
+        { volatile uint32_t d = on * 7U; while (d--) __NOP(); }
+        remain -= on;
+        if (remain > 0) {
+            uint32_t off = (cycle > on_us) ? (cycle - on_us) : 0U;
+            if (off > remain) off = remain;
+            TIM_SetCompare4(TIM3, 0);
+            { volatile uint32_t d = off * 7U; while (d--) __NOP(); }
+            remain -= off;
+        }
+    }
     TIM_SetCompare4(TIM3, 0);
 }
 

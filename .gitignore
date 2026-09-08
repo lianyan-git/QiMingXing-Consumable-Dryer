@@ -1,6 +1,8 @@
 # ---- build outputs ----
 build/
 Objects/
+Listings/
+C/
 *.o
 *.axf
 *.bin

@@ -23,6 +23,8 @@ W25Q128_Status_t W25Q128_GetJedecId(uint32_t *jedec_id);
 W25Q128_Status_t W25Q128_Read(uint32_t address, uint8_t *buffer, uint32_t length);
 W25Q128_Status_t W25Q128_Write(uint32_t address, const uint8_t *buffer, uint32_t length);
 W25Q128_Status_t W25Q128_EraseSector(uint32_t address);
+W25Q128_Status_t W25Q128_StartEraseSector(uint32_t address);
+W25Q128_Status_t W25Q128_StartWritePage(uint32_t address, const uint8_t *buffer, uint32_t length);
 W25Q128_Status_t W25Q128_EraseRange(uint32_t address, uint32_t length);
 W25Q128_Status_t W25Q128_ClearProtection(void);
 W25Q128_Status_t W25Q128_WREN(void);

@@ -152,8 +152,8 @@ static void SendSensorData(int conn_id)
     uint16_t hours = (uint16_t)(secs / 3600);
     uint16_t mins = (uint16_t)((secs % 3600) / 60);
     uint16_t secs_rem = (uint16_t)(secs % 60);
-    sprintf(json, "{\"temp\":%.1f,\"hum\":%.1f,\"time\":\"%02d:%02d:%02d\",\"weight\":%.1f}",
-            g_sys.current_temp, g_sys.current_humidity, hours, mins, secs_rem, g_sys.weight_g);
+    sprintf(json, "{\"temp\":%.1f,\"hum\":%.1f,\"time\":\"%02d:%02d:%02d\",\"weight\":%d}",
+            g_sys.current_temp, g_sys.current_humidity, hours, mins, secs_rem, (int)g_sys.weight_g);
     (void)json;
 }
 

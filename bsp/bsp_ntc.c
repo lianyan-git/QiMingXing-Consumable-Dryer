@@ -4,11 +4,11 @@
 #include "stm32f10x.h"
 #include <math.h>
 
-/* 100K/B3950 NTC + 10K? ??? 3.3V
- * ???V_REF(ADC??) = V_pullup(????) = 3.3V ? ??? V ??
- * ADC = Rntc * 4095 / (Rntc + 10000)?? VREF ??
+/* 100K/B3950 NTC + 10K pull-up @ 3.3V
+ * V_REF(ADC) = V_pullup(pullup) = 3.3V
+ * ADC = Rntc * 4095 / (Rntc + 10000), VREF 12bit
  * Rntc = 10000 * ADC / (4095 - ADC)
- * ??? B ???????????? LUT ???? VREFINT */
+ * 温度换算按 B 参数公式 + VREFINT 校准 */
 
 static uint16_t adc_read_channel(uint8_t ch)
 {
@@ -72,12 +72,12 @@ int16_t NTC_GetTemperature(void)
     float tempC = 1.0f / invT - 273.15f;
 
     if (tempC < -40.0f) tempC = -40.0f;
-    if (tempC > 125.0f) tempC = 125.0f;
+    if (tempC > 200.0f) tempC = 200.0f;   /* 上限放宽到200℃，避免 PTC 温度被卡在125 */
 
-    /* ?????????? 25%???? 75%????? */
+    /* 轻量平滑（10Hz 采样下响应更快，避免腔内温度"一度一度慢慢爬"） */
     static float filtered = -999.0f;
-    if (filtered < -100.0f) filtered = tempC;   /* ?????? */
-    else filtered = filtered * 0.75f + tempC * 0.25f;
+    if (filtered < -100.0f) filtered = tempC;   /* 首帧直通 */
+    else filtered = filtered * 0.6f + tempC * 0.4f;
 
     return (int16_t)(filtered * 10.0f);
 }
