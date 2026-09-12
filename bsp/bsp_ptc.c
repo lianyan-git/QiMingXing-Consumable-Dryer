@@ -1,4 +1,4 @@
-﻿#ifndef BOOTLOADER_BUILD
+#ifndef BOOTLOADER_BUILD
 #include "bsp_ptc.h"
 #include "bsp_fan.h"
 #include "bsp_ntc.h"

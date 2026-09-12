@@ -1,4 +1,4 @@
-﻿#ifndef BOOTLOADER_BUILD
+#ifndef BOOTLOADER_BUILD
 #include "system_config.h"
 #include "shared_defs.h"
 #include "sfud_flash.h"
@@ -8,7 +8,7 @@
 #include <string.h>
 
 #define PARAM_MAGIC     0x50415242
-#define PARAM_VERSION   1U   /* 结构布局版本：以后只在末尾追加字段并升版本号，重烧不覆盖旧参数 */
+#define PARAM_VERSION   2U   /* 结构布局版本：以后只在末尾追加字段并升版本号，重烧不覆盖旧参数 */
 #define PARAM_EXT_ADDR  0x00FE0000
 
 /* ── SFUD 参数存储封装（内置于本文件，确保符号参与链接） ── */
@@ -133,6 +133,9 @@ float pid_air_kp;
     uint8_t current_preset;
     uint8_t reserved[1];
 
+    uint8_t can_enabled;
+    uint8_t can_role;
+
     uint32_t checksum;
 } SystemParams_t;
 
@@ -160,6 +163,7 @@ static uint32_t calc_checksum(const SystemParams_t *p)
                  + p->buzzer_link + p->buzzer_vol + p->light_switch
                  + p->backlight + p->theme + p->screen_off_timeout
                  + p->wifi_enabled + p->pid_calibrated
+                 + p->can_enabled + p->can_role
                  + p->preset_count + p->current_preset;
     uint8_t i;
     for (i = 0; i < PRESET_MAX; i++) sum += preset_sum(&p->presets[i]);
@@ -197,6 +201,8 @@ static void params_snapshot(SystemParams_t *p)
     p->rgb_enabled = g_sys.params.rgb_enabled;
     p->rgb_led_bright = g_sys.params.rgb_led_bright;
     p->rgb_strip_bright = g_sys.params.rgb_strip_bright;
+    p->can_enabled = g_sys.params.can_enabled;
+    p->can_role = g_sys.params.can_role;
 
     p->buzzer_link = g_sys.buzzer_link;
     p->buzzer_vol = g_sys.buzzer_vol;
@@ -239,6 +245,8 @@ static void params_restore(const SystemParams_t *p)
     g_sys.params.rgb_enabled = p->rgb_enabled;
     g_sys.params.rgb_led_bright = p->rgb_led_bright;
     g_sys.params.rgb_strip_bright = p->rgb_strip_bright;
+    g_sys.params.can_enabled = p->can_enabled;
+    g_sys.params.can_role = p->can_role;
 
     g_sys.buzzer_link = p->buzzer_link;
     g_sys.buzzer_vol = p->buzzer_vol;
@@ -288,6 +296,7 @@ static int params_valid(const SystemParams_t *p)
     if (p->motor_swing_cal < 100 || p->motor_swing_cal > 300) return 0;
     if (p->motor_driver > MOTOR_DRIVER_TMC2209) return 0;
     if (p->rgb_led_bright > 100 || p->rgb_strip_bright > 100) return 0;
+    if (p->can_enabled > 1 || p->can_role > 1) return 0;
     if (p->buzzer_vol > 10 || p->backlight > 100 || p->theme > 1
         || p->screen_off_timeout > 8 || p->light_switch > 1
         || p->buzzer_link > 1 || p->wifi_enabled > 1 || p->pid_calibrated > 1) return 0;
@@ -345,48 +354,132 @@ static int flash_write_pages(uint32_t addr, const uint8_t *buf, uint32_t len)
     return 0;
 }
 
+/* ── 后台非阻塞保存 ─────────────────────────────────────────────
+ * 旧版 System_RequestSave 同步擦扇区+写页（擦除典型 ~0.4s，最坏 ~2s），
+ * 主循环在此期间完全停摆：编码器/串口收行/ESP 链路/UI 全部冻结，
+ * 网页滑块每步都触发保存时表现为"命令慢/卡/按钮无响应"。
+ * 现改为：Request 只做 RAM 快照+置位，Poll 在主循环里分片执行
+ * （发起擦除→等待 WIP→逐页写，每步只占 SPI 极短的命令事务）。
+ * 进行中再来的请求：覆盖快照（pending 置位），本次保存完成后自动重存。*/
+static SystemParams_t s_save_mem;          /* 待保存快照 */
+static uint8_t  s_save_pending = 0;
+static uint8_t  s_save_st      = 0;        /* 0=空闲 1=擦除等待 2=发写页命令 3=写页等待 */
+static uint8_t  s_save_fails   = 0;
+static uint16_t s_save_page    = 0;
+static uint32_t s_save_t0      = 0;
+
+#define SAVE_PAGES      ((uint16_t)((sizeof(SystemParams_t) + 255U) / 256U))
+#define SAVE_ERASE_TMO  3000U
+#define SAVE_PAGE_TMO   1500U
+#define SAVE_MAX_FAILS  8U
+
+/* ---- 外部 Flash 操作所有权（参数保存 / 曲线记录 共享，见 system_config.h 说明）---- */
+static uint8_t s_fop_owner = 0;   /* 0=空闲 1=有人持有（操作者自发出命令起持有，直至 WIP 清零释放） */
+
+uint8_t SysFlashOp_TryBegin(void)
+{
+    if (s_fop_owner) return 0;
+    s_fop_owner = 1;
+    return 1;
+}
+
+void SysFlashOp_Release(void)
+{
+    s_fop_owner = 0;
+}
+
 void System_RequestSave(void)
 {
     SystemParams_t params;
     uint8_t raw[sizeof(SystemParams_t)];
 
-    /* 单击退出选项时同步阻塞写入外部Flash，保证断电前已落盘（总线忙时重试） */
     params_snapshot(&params);
     params.checksum = calc_checksum(&params);
     memcpy(raw, &params, sizeof(SystemParams_t));
-
-    {
-        uint8_t sr1;
-        int r, attempts;
-        /* 擦除：忙(TFT占用)则重试 */
-        for (attempts = 0; attempts < 60; attempts++) {
-            r = SfudFlash_StartEraseSector(PARAM_EXT_ADDR);
-            if (r == 0) break;
-            if (r != 1) return;   /* 硬错误放弃 */
-        }
-        if (attempts >= 60) return;
-        {
-            uint32_t t0 = SystemTime_Millis();
-            for (;;) {
-                Watchdog_Kick();
-                if (SfudFlash_ReadSR1(&sr1) != 0) return;
-                if (!(sr1 & 0x01U)) break;
-                if ((uint32_t)(SystemTime_Millis() - t0) > 2000U) return;
-            }
-        }
-        /* 写入：数据跨 256 字节页时逐页写（SystemParams_t=272B，分两页） */
-        (void)flash_write_pages(PARAM_EXT_ADDR, raw, sizeof(SystemParams_t));
-    }
+    memcpy(&s_save_mem, raw, sizeof(SystemParams_t));
+    s_save_pending = 1;
 }
 
 void System_PollSave(void)
 {
-    /* 保存已改为同步阻塞（System_RequestSave），此处保留兼容空实现 */
+    uint8_t sr1;
+    int r;
+
+    if (s_save_st == 0) {
+        if (!s_save_pending) return;
+        s_save_pending = 0;                                 /* 快照已在 s_save_mem：期间新请求会重新置位 */
+        if (!SysFlashOp_TryBegin()) { s_save_pending = 1; return; }  /* 曲线记录等正持闪：下轮再试 */
+        r = SfudFlash_StartEraseSector(PARAM_EXT_ADDR);     /* 发出命令起持有 */
+        if (r == 1) { SysFlashOp_Release(); s_save_pending = 1; return; }  /* 总线忙(TFT占用)，未发命令：释放重试 */
+        if (r != 0) { SysFlashOp_Release(); return; }       /* 硬错误 */
+        s_save_fails = 0;
+        s_save_st    = 1;                                    /* 持有中：等待擦除 */
+        s_save_page  = 0;
+        s_save_t0    = SystemTime_Millis();
+        return;
+    }
+
+    if (s_save_st == 1) {                                    /* 持有中：等待擦除完成 */
+        if (SystemTime_Millis() - s_save_t0 > SAVE_ERASE_TMO) {
+            SysFlashOp_Release();
+            s_save_st = 0;
+            if (++s_save_fails >= SAVE_MAX_FAILS) s_save_pending = 0;
+            return;
+        }
+        if (SfudFlash_ReadSR1(&sr1) != 0) return;            /* 读状态失败：下轮重试 */
+        if (sr1 & 0x01U) return;                             /* WIP 仍在擦除 */
+        SysFlashOp_Release();                                /* WIP 清零：释放 */
+        s_save_st = 2;                                       /* 下轮重新获取并发改页写 */
+        return;
+    }
+
+    if (s_save_st == 2) {                                    /* 未持有：获取→发当前页写命令 */
+        if (!SysFlashOp_TryBegin()) return;                  /* 他人持有：下轮再试 */
+        {
+            uint32_t off = (uint32_t)s_save_page * 256U;
+            uint32_t len = (uint32_t)sizeof(SystemParams_t) - off;
+            if (len > 256U) len = 256U;
+            r = SfudFlash_StartWritePage(PARAM_EXT_ADDR + off, (const uint8_t *)&s_save_mem + off, len);
+        }
+        if (r == 1) { SysFlashOp_Release(); return; }        /* 总线忙，未发命令：释放重试 */
+        if (r != 0) {
+            SysFlashOp_Release();
+            s_save_st = 0;
+            if (++s_save_fails >= SAVE_MAX_FAILS) s_save_pending = 0;
+            return;
+        }
+        s_save_st = 3;                                       /* 持有中：等待页写 */
+        s_save_t0 = SystemTime_Millis();
+        return;
+    }
+
+    /* st == 3：持有中，等待页写入完成 */
+    if (SystemTime_Millis() - s_save_t0 > SAVE_PAGE_TMO) {
+        SysFlashOp_Release();
+        s_save_st = 0;
+        if (++s_save_fails >= SAVE_MAX_FAILS) s_save_pending = 0;
+        return;
+    }
+    if (SfudFlash_ReadSR1(&sr1) != 0) return;
+    if (sr1 & 0x01U) return;                                 /* WIP 仍在写 */
+    SysFlashOp_Release();                                    /* WIP 清零：释放 */
+    s_save_page++;
+    if (s_save_page >= SAVE_PAGES) {
+        s_save_st = 0;                                       /* 保存完成；期间有新请求则 pending 仍为1，下轮重存 */
+        s_save_fails = 0;
+    } else {
+        s_save_st = 2;                                       /* 下一页 */
+    }
 }
 
-/* 等待保存完成（重启前调用）—— 保存已同步完成，直接返回 */
+/* 等待保存完成（重启前调用）——限时 5s，期间持续推进状态机并喂狗（擦除最坏 ~2s < IWDG 4s 窗口） */
 void System_FlushSave(void)
 {
+    uint32_t t0 = SystemTime_Millis();
+    while ((s_save_st != 0 || s_save_pending) && (SystemTime_Millis() - t0) < 5000U) {
+        System_PollSave();
+        Watchdog_Kick();
+    }
 }
 
 void System_SaveParams(void)

@@ -31,5 +31,10 @@ void theme_apply(void);
 void UI_UpdateMainDynamic(void);
 void UI_RefreshCard(uint8_t item);
 void UI_ResetOTAScreen(void);
+void UI_DrawMusic(void);
+void UI_MusicScroll(int dir);
+void UI_DrawMusicList(void);
+void UI_MusicListScroll(int dir);
+void UI_DrawMusicPopup(void);
 
 #endif

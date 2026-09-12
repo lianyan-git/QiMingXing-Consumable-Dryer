@@ -1,0 +1,14 @@
+; ******************************************************************
+; * Music firmware image: MUB1 container at FIXED addresses
+; * HDR@0x00(36B)  ENT@0x24(16B)  NAME@0x34(64B)  NOTES@0x74(...)
+; * The generated Music.bin can be uploaded on the device
+; * "Music -> Upload Music" web page into external flash.
+; ******************************************************************
+
+LR_MUSIC 0x08000000 0x00200000
+{
+    ER_HDR   0x08000000 0x00000024 { *(MUS_HDR) }
+    ER_ENT   0x08000024 0x00000010 { *(MUS_ENT) }
+    ER_NAME  0x08000034 0x00000040 { *(MUS_NAME) }
+    ER_NOTES 0x08000074 0x001FFF8C { *(MUS_NOTES) }
+}

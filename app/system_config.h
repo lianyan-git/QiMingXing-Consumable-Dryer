@@ -1,4 +1,4 @@
-﻿#ifndef __SYSTEM_CONFIG_H
+#ifndef __SYSTEM_CONFIG_H
 #define __SYSTEM_CONFIG_H
 
 #include "shared_defs.h"
@@ -54,6 +54,9 @@ typedef enum {
     SCREEN_OTA,
     SCREEN_SAFETY_ALERT,
     SCREEN_SETTINGS,
+    SCREEN_CAN,
+    SCREEN_MUSIC,        /* 音乐主页面（上传音乐 / 音乐列表 / 退出） */
+    SCREEN_MUSIC_LIST,   /* 音乐列表（自适应滚动，含播放中进度与长名跑马灯） */
 } Screen_t;
 
 typedef enum {
@@ -123,6 +126,9 @@ typedef struct {
     uint8_t rgb_enabled;              // RGB灯条总开关 1=开 0=关
     uint8_t rgb_led_bright;           // 指示灯亮度 0-100
     uint8_t rgb_strip_bright;         // 灯条亮度 0-100
+
+    uint8_t can_enabled;              // CAN通讯总开关 0=关 1=开
+    uint8_t can_role;                 // 主从关系 0=主机 1=从机
 
     Preset_t presets[PRESET_MAX];   // 动态预设列表（前4个为内置，可增删）
     uint8_t preset_count;           // 当前预设个数
@@ -207,6 +213,22 @@ typedef struct {
     uint8_t rgb_bright_popup; /* RGB亮度弹窗激活 */
     uint8_t rgb_bright_sel;   /* 0=指示灯 1=灯条 2=完成 */
     uint8_t rgb_bright_edit;  /* RGB亮度弹窗编辑态: 0=选参数 1=编辑数值 */
+    uint8_t can_connected;    /* CAN 已连接从机数(主机视角，实时) */
+    uint8_t can_joined;       /* CAN 从机是否已接入主机网络(从机视角) */
+    uint8_t can_edit_active;  /* CAN 页编辑态: 0=选行 1=编辑 */
+    uint8_t can_search_tick;  /* CAN 搜索提示帧计数 0=无 */
+    uint8_t wifi_edit_active; /* WiFi开关编辑态: 0=选行 1=选中待确认(再单击退出才生效) */
+    uint8_t wifi_edit_orig;   /* 进入WiFi开关编辑态时的原状态，退出时比较决定是否切换ESP */
+    uint8_t ui_force_redraw;  /* 外部(网页命令等)请求整屏重绘的标志，UI_Update 消费后清零 */
+
+    /* ---- 音乐 / 上传 ---- */
+    uint8_t music_popup;      /* 上传音乐弹窗态: 0=无 1=已显示待开AP 2=AP已开/等待上传 3=上传中 4=完成 5=失败 */
+    uint8_t music_ota_active; /* 1=音乐上传接收态（EspLink 字节路由到 MusicOta） */
+    uint8_t music_upload_pct; /* 上传进度 0..100 */
+    uint8_t music_track_play; /* 正在播放的曲目索引(0..n-1) 或 0xFF=未播放 */
+    int16_t music_marquee;    /* 列表长名跑马灯水平偏移(px) */
+    uint32_t music_upload_total;   /* 本次上传字节数（进度用） */
+    uint32_t music_upload_recv;    /* 本次已收字节数 */
 } SystemState_t;
 
 extern SystemState_t g_sys;
@@ -219,6 +241,15 @@ void System_RequestSave(void);
 void System_PollSave(void);
 void System_FlushSave(void);
 void System_FactoryReset(void);
+
+/* ---- 外部 Flash 串行操作协调 -------------------------------------------------
+ * SPI NOR 在 WIP=1 期间会静默忽略（不排队）新操作命令。参数保存与曲线记录
+ * 若交叉发起操作，后发命令被丢弃、而各自的 WIP 轮询又会误判“完成”，
+ * 最终可能把数据写进未擦除的扇区。约定：操作者自“发出命令”起持有 Flash，
+ * 直到“确认 WIP 清零”才释放；未持有者发起前必须先 TryBegin，失败则延迟重试。 */
+uint8_t SysFlashOp_TryBegin(void);   /* 1=获取成功 0=他人持有（调用方应延迟重试） */
+void    SysFlashOp_Release(void);    /* 只在确认 WIP 已清零（或放弃操作）后调用 */
+
 uint32_t System_GetDeviceId(void);
 void StartDrying(void);
 void StopDrying(void);

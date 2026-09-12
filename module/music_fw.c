@@ -1,0 +1,83 @@
+/*
+ * music_fw.c — 音乐固件源（EIDE 目标：Music）
+ *
+ * 用法：
+ *   1) 改下面 MUSIC_NAME_BYTES（曲名 UTF-8 字节，注释写中文名）
+ *      与 MUSIC_NOTES（音符表：{频率Hz, 时长ms, ...}，freq=0 休止，结尾 0,0）
+ *      频率参考：1=C4 262, 2=D4 294, 3=E4 330, 4=F4 349, 5=G4 392,
+ *                6=A4 440, 7=B4 494, 1'=C5 523, 2'=D5 587, 3'=E5 659
+ *      中文转 UTF-8 字节：可用浏览器控制台「new TextEncoder().encode('晴天')」
+ *      例：晴天 = E6 99 B4 E5 A4 A9；小星星 = E5 B0 8F E6 98 9F E6 98 9F
+ *   2) EIDE 目标切换到 Music 构建 → build\Music\Music.bin
+ *   3) 设备「音乐 → 上传音乐」页面上传该 bin → 存外部 Flash、列表显示曲名
+ *
+ * 本文件生成标准 MUB1 容器（36B 头 + 16B 曲目表 + 名称区 + 音符区），
+ * 由 music.sct 把四个段按序布局成完整文件。以下打包部分一般无需改动。
+ *
+ * 注意：曲名用 UTF-8 字节转义（\xNN）而非直接中文，因为 armcc 在中文系统下
+ * 按 GBK 解析源码，直接写 UTF-8 中文会破坏字符串字面量。
+ */
+#include <stdint.h>
+
+/* ================== 在这里编辑你的音乐 ================== */
+/* 曲名 UTF-8 字节（不含结尾 0），示例：晴天 */
+#define MUSIC_NAME_BYTES  { 0xE6, 0x99, 0xB4, 0xE5, 0xA4, 0xA9 }
+/* 音符表：{freq, dur} 对，结尾 0,0 */
+#define MUSIC_NOTES  { 392,300, 440,300, 523,300, 494,300, 440,300, 392,300, \
+                       440,300, 392,300, 330,300, 294,300,                    \
+                       330,300, 392,300, 440,300, 523,300,                    \
+                       494,300, 440,300, 392,600,                             \
+                       440,300, 392,300, 330,300, 392,300, 440,300,           \
+                       392,300, 330,300, 294,300, 330,300,                    \
+                       392,300, 440,300, 523,300, 494,300, 440,300,           \
+                       392,300, 330,300, 392,300, 440,600,                    \
+                       0,0 }
+/* ======================================================== */
+
+#define HDR_SIZE    36u                       /* 与 STM32 music_store 解析一致 */
+#define ENT_OFF     HDR_SIZE                  /* 曲目表紧随头部 */
+#define NAME_OFF    (HDR_SIZE + 16u)          /* 单曲目：表 16B 后即名称 */
+#define NAME_MAX    64u                       /* 名称区定长（不足自动补零） */
+#define NOTES_OFF   (NAME_OFF + NAME_MAX)     /* 116，恰为偶数对齐 uint16 */
+
+/* ---- 名称区（定长 64B：UTF-8 字节 + 补零）---- */
+__attribute__((section("MUS_NAME"), used))
+const unsigned char mus_name[NAME_MAX] = MUSIC_NAME_BYTES;
+
+/* ---- 音符区：{u16 freq, u16 dur} × n，小端，0,0 结尾 ---- */
+__attribute__((section("MUS_NOTES"), used))
+const uint16_t mus_notes[] = MUSIC_NOTES;
+
+#define NAME_LEN    ((uint32_t)sizeof(mus_name))          /* 恒为 NAME_MAX */
+#define NOTE_BYTES  ((uint32_t)sizeof(mus_notes))
+#define FILE_SIZE   (NOTES_OFF + NOTE_BYTES)
+
+#define B0(v) ((unsigned char)((uint32_t)(v) & 0xFFu))
+#define B1(v) ((unsigned char)(((uint32_t)(v) >> 8) & 0xFFu))
+#define B2(v) ((unsigned char)(((uint32_t)(v) >> 16) & 0xFFu))
+#define B3(v) ((unsigned char)(((uint32_t)(v) >> 24) & 0xFFu))
+
+/* ---- 36B 头部：magic/version/count/flags/size/crc/name_off/name_size/track_off/rsvd ---- */
+__attribute__((section("MUS_HDR"), used))
+const unsigned char mus_hdr[HDR_SIZE] = {
+    'M', 'U', 'B', '1',
+    0x01, 0x00, 0x00, 0x00,                    /* version = 1 */
+    0x01, 0x00,                                /* track_count = 1 */
+    0x00, 0x00,                                /* flags = 0 */
+    B0(FILE_SIZE), B1(FILE_SIZE), B2(FILE_SIZE), B3(FILE_SIZE),
+    0x00, 0x00, 0x00, 0x00,                    /* crc32：上传校验走链路 CRC，此字段不参与 */
+    B0(NAME_OFF), B1(NAME_OFF), B2(NAME_OFF), B3(NAME_OFF),
+    B0(NAME_LEN), B1(NAME_LEN), B2(NAME_LEN), B3(NAME_LEN),
+    B0(ENT_OFF), B1(ENT_OFF), B2(ENT_OFF), B3(ENT_OFF),
+    0x00, 0x00, 0x00, 0x00,                    /* reserved */
+};
+
+/* ---- 16B 曲目表：note_off / note_size / name_off / name_len / rsvd ---- */
+__attribute__((section("MUS_ENT"), used))
+const unsigned char mus_ent[16] = {
+    B0(NOTES_OFF), B1(NOTES_OFF), B2(NOTES_OFF), B3(NOTES_OFF),
+    B0(NOTE_BYTES), B1(NOTE_BYTES), B2(NOTE_BYTES), B3(NOTE_BYTES),
+    B0(NAME_OFF), B1(NAME_OFF), B2(NAME_OFF), B3(NAME_OFF),
+    B0(NAME_LEN), B1(NAME_LEN),
+    0x00, 0x00,
+};

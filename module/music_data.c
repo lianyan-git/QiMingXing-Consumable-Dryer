@@ -1,0 +1,82 @@
+/*
+ * music_data.c — 内置音乐曲目表（“音乐固件”库文件）
+ * 所有内置音乐都写在这里：曲目名（中文，字数适配 TFT）+ 音符表。
+ * 由编译参数 `music` 控制是否编译（build define: music）。
+ * 音符表格式：{freq_hz, dur_ms} 交错排列，freq=0 表示休止，全部为 0 结束。
+ * 之后新增/替换内置音乐：在 kTracks 里加一项即可。
+ */
+#include "music_data.h"
+
+#ifdef music
+
+typedef struct {
+    const char *title;
+    const uint16_t *notes;      /* {freq,dur,...} */
+    uint16_t note_count;        /* 音符数（不含结束对） */
+} BuiltinTrack_t;
+
+/* 周杰伦《晴天》主旋律（C大调，简化片段，供测试播放效果） */
+static const uint16_t kSong1[] = {
+    /* 刮风这天 / 副歌前奏片段 ：
+       5 6 1' 7 6 5 | 6 5 3 2 | 3 5 6 1' | 7 6 5 - |
+       6 5 3 5 6 | 5 3 2 3 | 5 6 1' 7 6 | 5 3 5 6 5 - | */
+    392,300, 440,300, 523,300, 494,300, 440,300, 392,300,
+    440,300, 392,300, 330,300, 294,300,
+    330,300, 392,300, 440,300, 523,300,
+    494,300, 440,300, 392,600,
+    /* 第二遍变奏 */
+    440,300, 392,300, 330,300, 392,300, 440,300,
+    392,300, 330,300, 294,300, 330,300,
+    392,300, 440,300, 523,300, 494,300, 440,300,
+    392,300, 330,300, 392,300, 440,600,
+    0,0
+};
+
+static const BuiltinTrack_t kTracks[] = {
+    { "晴天", kSong1, 40 },
+};
+#define BUILTIN_COUNT (sizeof(kTracks) / sizeof(kTracks[0]))
+
+uint16_t MusicLib_BuiltinCount(void)
+{
+    return (uint16_t)BUILTIN_COUNT;
+}
+
+uint32_t MusicLib_BuiltinNoteCount(uint16_t track)
+{
+    if (track >= (uint16_t)BUILTIN_COUNT) return 0;
+    return kTracks[track].note_count;
+}
+
+int MusicLib_BuiltinGetNote(uint16_t track, uint32_t k, uint16_t *freq, uint16_t *dur)
+{
+    const uint16_t *p;
+    if (track >= (uint16_t)BUILTIN_COUNT) return -1;
+    p = kTracks[track].notes;
+    if (k >= kTracks[track].note_count) return -1;
+    if (freq) *freq = p[k * 2];
+    if (dur)  *dur  = p[k * 2 + 1];
+    return 0;
+}
+
+const char *MusicLib_BuiltinTitle(uint16_t track, uint16_t *len)
+{
+    if (track >= (uint16_t)BUILTIN_COUNT) { if (len) *len = 0; return ""; }
+    if (len) {
+        uint16_t n = 0;
+        while (kTracks[track].title[n]) n++;
+        *len = n;
+    }
+    return kTracks[track].title;
+}
+
+#else /* !music */
+
+uint16_t MusicLib_BuiltinCount(void) { return 0; }
+uint32_t MusicLib_BuiltinNoteCount(uint16_t track) { (void)track; return 0; }
+int MusicLib_BuiltinGetNote(uint16_t track, uint32_t k, uint16_t *freq, uint16_t *dur)
+{ (void)track; (void)k; if (freq) *freq = 0; if (dur) *dur = 0; return -1; }
+const char *MusicLib_BuiltinTitle(uint16_t track, uint16_t *len)
+{ (void)track; if (len) *len = 0; return ""; }
+
+#endif /* music */

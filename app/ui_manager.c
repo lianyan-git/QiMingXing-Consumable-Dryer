@@ -10,6 +10,9 @@
 #include "bsp_stepper.h"
 #include "system_time.h"
 #include "stm32f10x.h"
+#include "esp_link.h"
+#include "music_play.h"
+#include "music_store.h"
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -19,18 +22,22 @@
 #define ACCENT_W       3
 #define SEL_FRAME_W    2
 #define BTN_Y          218
-/* ── 主题色（可运行时切换，变量替代 #define） ── */
+/* 鈹鈹 涓婚�槝鑹诧紙鍙�杩愯屾椂鍒囨崲锛屽彉閲忔浛浠 #define锛 鈹鈹 */
 #define TFT_COLOR(r,g,b)  ((uint16_t)((((r)&0xF8)<<8)|(((g)&0xFC)<<3)|((b)>>3)))
 
-/* 亮色主题默认值 */
+/* 浜�鑹膊涓婚�槩橀粯璁ゅ */
 static uint16_t UI_BG           = TFT_COLOR(0xE8, 0xEA, 0xED);
 static uint16_t UI_CARD         = TFT_COLOR(0xFF, 0xFF, 0xFF);
 static uint16_t UI_CARD_HI      = TFT_COLOR(0xF0, 0xF4, 0xFF);
+static uint16_t TIME_CARD_BG    = TFT_COLOR(0xF8, 0xFA, 0xFF);   /* 璁剧疆鏃堕棿椤佃‖搴曪紝闅忎富棰槩樺垏鎹 */
+static uint16_t TIME_EDIT_TXT   = TFT_COLOR(0x22, 0x22, 0x22);   /* 缂栬緫鎬佹暟瀛楄壊锛岄殢涓婚�槝鍒囨� */
 static uint16_t CARD_BG_TEMP    = TFT_COLOR(0xFF, 0xF3, 0xE0);
 static uint16_t CARD_BG_HUMI    = TFT_COLOR(0xE1, 0xF5, 0xFE);
 static uint16_t CARD_BG_WEIGHT  = TFT_COLOR(0xF3, 0xE5, 0xF5);
 static uint16_t CARD_BG_PTC     = TFT_COLOR(0xFF, 0xEB, 0xEE);
 static uint16_t CARD_BG_TIME    = TFT_COLOR(0xE8, 0xF5, 0xE9);
+static uint16_t UI_FG           = TFT_COLOR(0x22, 0x22, 0x22);  /* 涓婚�槝鍓嶆欒壊锛圵iFi 椤电瓑锛 */
+static uint16_t UI_FG_DIM       = TFT_COLOR(0x88, 0x88, 0x88);  /* 涓婚�槝寮卞寲鍓嶆欒� */
 
 void theme_apply(void)
 {
@@ -38,27 +45,35 @@ void theme_apply(void)
         UI_BG        = TFT_COLOR(0xE8, 0xEA, 0xED);
         UI_CARD      = TFT_COLOR(0xFF, 0xFF, 0xFF);
         UI_CARD_HI   = TFT_COLOR(0xF0, 0xF4, 0xFF);
+        TIME_CARD_BG = TFT_COLOR(0xF8, 0xFA, 0xFF);  /* 杩戠櫧锛氱櫧鑹蹭富棰槩樹笅涓庡師瑙傛劅涓鑷 */
+        TIME_EDIT_TXT = TFT_COLOR(0x22, 0x22, 0x22);  /* 浜�鑹膊涓婚�槩樹笅缂栬緫鏁板瓧鐢ㄦ繁鐏 */
         CARD_BG_TEMP = TFT_COLOR(0xFF, 0xF3, 0xE0);
         CARD_BG_HUMI = TFT_COLOR(0xE1, 0xF5, 0xFE);
         CARD_BG_WEIGHT = TFT_COLOR(0xF3, 0xE5, 0xF5);
         CARD_BG_PTC  = TFT_COLOR(0xFF, 0xEB, 0xEE);
         CARD_BG_TIME = TFT_COLOR(0xE8, 0xF5, 0xE9);
-    } else {  /* 暗色（柔和深灰蓝，避免近黑造成"黑底"观感） */
+        UI_FG        = TFT_COLOR(0x22, 0x22, 0x22);   /* 浜�鑹膊锛氭繁鐏版枃瀛� */
+        UI_FG_DIM    = TFT_COLOR(0x88, 0x88, 0x88);
+    } else {  /* 鏆楄壊锛堟煍鍜屾繁鐏拌摑锛岄伩鍏嶈繎榛戦犳垚"黑底"瑙傛劅锛 */
         UI_BG        = TFT_COLOR(0x3A, 0x3A, 0x4A);
         UI_CARD      = TFT_COLOR(0x46, 0x46, 0x58);
         UI_CARD_HI   = TFT_COLOR(0x52, 0x52, 0x66);
+        TIME_CARD_BG = TFT_COLOR(0x4E, 0x4E, 0x60);   /* 鏆楄壊涓婚�槝锛氳″簳姣旈〉闈㈠簳鐣ヤ轰告。锛屼笌鏆楄儗鏅�璐村悎 */
+        TIME_EDIT_TXT = TFT_COLOR(0xEC, 0xEF, 0xF1);  /* 鏆楄壊涓婚�槝涓嬬紪杈戞暟瀛楃敤浜�鐏 */
         CARD_BG_TEMP = TFT_COLOR(0x4E, 0x3D, 0x2A);
         CARD_BG_HUMI = TFT_COLOR(0x2A, 0x3D, 0x4E);
         CARD_BG_WEIGHT = TFT_COLOR(0x3D, 0x2A, 0x3D);
         CARD_BG_PTC  = TFT_COLOR(0x4E, 0x2A, 0x2A);
         CARD_BG_TIME = TFT_COLOR(0x2A, 0x4E, 0x2A);
+        UI_FG        = TFT_COLOR(0xEC, 0xEF, 0xF1);   /* 暗色：亮灰文字（不再黑字看不清） */
+        UI_FG_DIM    = TFT_COLOR(0x9A, 0x9A, 0xAC);
     }
 }
 
 #define BTN_H          18
 #define BTN_GAP        4
 
-/* 非背景色保持常量 #define */
+/* 闈炶儗鏅鑹蹭繚鎸佸父閲 #define */
 #define UI_CARD_EDGE    TFT_COLOR(0xD0, 0xD0, 0xD0)
 #define UI_TEXT         TFT_COLOR(0x22, 0x22, 0x22)
 #define UI_TEXT_DIM     TFT_COLOR(0x88, 0x88, 0x88)
@@ -69,11 +84,11 @@ void theme_apply(void)
 #define UI_CYAN         TFT_COLOR(0x00, 0xBC, 0xD4)
 #define UI_PURPLE       TFT_COLOR(0x9C, 0x27, 0xB0)
 
-/* 主副标题用 TFT_DrawString(scale) 渲染（原版 5x7 点阵） */
+/* 涓诲壇鏍囬樼敤 TFT_DrawString(scale) 娓叉煋锛堝師鐗 5x7 鐐归樀锛 */
 
 static void Delay_ms(uint16_t ms);
 
-/* 普通边框（不保留圆角，用于按钮等） */
+/* 鏅閫氳竟妗嗭紙涓嶄繚鐣欏渾瑙掞紝鐢ㄤ簬鎸夐挳绛夛級 */
 static void draw_frame(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color)
 {
     TFT_FillRect(x, y, w, SEL_FRAME_W, color);
@@ -82,9 +97,9 @@ static void draw_frame(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t 
     TFT_FillRect(x + w - SEL_FRAME_W, y, SEL_FRAME_W, h, color);
 }
 
-/* 圆角边框：直线段 + 四角圆弧描边（完整跟随圆角轮廓） */
-/* 真圆角矩形：标准圆角——角弧圆心位于 (x+r, y+r)，半径 r。
- * 角区像素中心到圆心距离 > r 者切除，中间用 FillRect 高效填充，四角对称。 */
+/* 鍦嗚掕竟妗嗭細鐩寸嚎娈 + 鍥涜掑渾寮ф弿杈癸紙瀹屾暣璺熼殢鍦嗚掕疆寤擄級 */
+/* 鐪熷渾瑙掔煩褰锛氭爣鍑嗗渾瑙掆斺旇掑姬鍦嗗績浣嶄簬 (x+r, y+r)锛屽崐寰 r銆
+ * 瑙掑尯鍍忕礌涓蹇冨埌鍦嗗績璺濈 > r 鑰呭垏闄わ紝涓闂寸敤 FillRect 楂樻晥濉鍏咃紝鍥涜掑圭О銆 */
 static void fill_round_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
                             uint16_t color, uint8_t radius)
 {
@@ -99,7 +114,7 @@ static void fill_round_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
         int32_t r2 = (int32_t)radius * (int32_t)radius * 4;   /* (2r)2 */
         for (i = 0; i < radius; i++) {
             int32_t dy = (int32_t)(2 * i + 1) - (int32_t)(2 * radius);
-            int32_t maxdx = r2 - dy * dy;                     /* 本行 Δx2 上限 */
+            int32_t maxdx = r2 - dy * dy;                     /* 鏈琛 螖x2 涓婇檺 */
             if (maxdx < 0) continue;
             for (j = 0; j < radius; j++) {
                 int32_t dx = (int32_t)(2 * j + 1) - (int32_t)(2 * radius);
@@ -116,8 +131,8 @@ static void fill_round_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
     }
 }
 
-/* 圆角描边：厚 th 的边框，圆弧与 fill_round_rect 同圆心——贴合轮廓描边，
- * 内部只有平铺填充，不再出现内层嵌套圆弧。 */
+/* 鍦嗚掓弿杈癸細鍘 th 鐨勮竟妗嗭紝鍦嗗姬涓 fill_round_rect 鍚屽渾蹇冣斺旇创鍚堣疆寤撴弿杈癸紝
+ * 鍐呴儴鍙鏈夊钩閾哄～鍏咃紝涓嶅啀鍑虹幇鍐呭眰宓屽楀渾寮с */
 static void draw_round_outline(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
                                uint16_t color, uint8_t radius, uint8_t th)
 {
@@ -129,11 +144,11 @@ static void draw_round_outline(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
     if (radius > w / 2U) radius = (uint8_t)(w / 2U);
     if (radius > h / 2U) radius = (uint8_t)(h / 2U);
     if (th > radius) th = radius;
-    /* 直线段 */
-    TFT_FillRect(x + radius, y, w - 2U * radius, th, color);               /* 上 */
-    TFT_FillRect(x + radius, y + h - th, w - 2U * radius, th, color);      /* 下 */
-    TFT_FillRect(x, y + radius, th, h - 2U * radius, color);               /* 左 */
-    TFT_FillRect(x + w - th, y + radius, th, h - 2U * radius, color);      /* 右 */
+    /* 鐩寸嚎娈 */
+    TFT_FillRect(x + radius, y, w - 2U * radius, th, color);               /* 涓 */
+    TFT_FillRect(x + radius, y + h - th, w - 2U * radius, th, color);      /* 涓 */
+    TFT_FillRect(x, y + radius, th, h - 2U * radius, color);               /* 宸 */
+    TFT_FillRect(x + w - th, y + radius, th, h - 2U * radius, color);      /* 鍙 */
     {
         int32_t r2  = (int32_t)radius * (int32_t)radius * 4;               /* (2r)2 */
         int32_t rin = (int32_t)(radius - th) * (int32_t)(radius - th) * 4; /* (2(r-th))2 */
@@ -152,7 +167,7 @@ static void draw_round_outline(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
             }
             if (j1 >= 0) {
                 uint16_t cnt = (uint16_t)(j2 - j1 + 1);
-                /* 右侧镜像：角内相对列 (r-1-j2) 起笔，与左侧严格对称 */
+                /* 鍙充晶闀滃儚锛氳掑唴鐩稿瑰垪 (r-1-j2) 璧风瑪锛屼笌宸︿晶涓ユ牸瀵圭О */
                 uint16_t rx = (uint16_t)(x + w - radius + (radius - 1 - j2));
                 TFT_FillRect((uint16_t)(x + j1), (uint16_t)(y + i), cnt, 1U, color);                  /* 左上 */
                 TFT_FillRect(rx, (uint16_t)(y + i), cnt, 1U, color);                                  /* 右上 */
@@ -163,7 +178,7 @@ static void draw_round_outline(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
     }
 }
 
-/* ── 颜色插值工具（RGB565） ── */
+/* 鈹鈹 棰滆壊鎻掑煎伐鍏凤紙RGB565锛 鈹鈹 */
 static uint16_t lerp_color(uint16_t c1, uint16_t c2, uint8_t t)
 {
     if (t >= 255U) return c2;
@@ -176,7 +191,7 @@ static uint16_t lerp_color(uint16_t c1, uint16_t c2, uint8_t t)
     return (uint16_t)((r << 11) | (g << 5) | b);
 }
 
-/* 选中卡顶部色条：随时间在 ACCENT 与高亮之间呼吸（平滑动画） */
+/* 閫変腑鍗￠《閮ㄨ壊鏉★細闅忔椂闂村湪 ACCENT 涓庨珮浜涔嬮棿鍛煎惛锛堝钩婊戝姩鐢伙級 */
 static uint16_t pulse_color(void)
 {
     uint32_t t = SystemTime_Millis() % 1600U;   /* 1.6s 周期 */
@@ -186,7 +201,7 @@ static uint16_t pulse_color(void)
     return lerp_color(UI_ACCENT, UI_TEXT, phase);
 }
 
-/* 在卡片顶部画高亮呼吸色条（仅选中卡，小区域局部刷新不闪烁） */
+/* 鍦ㄥ崱鐗囬《閮ㄧ敾楂樹寒鍛煎惛鑹叉潯锛堜粎閫変腑鍗★紝灏忓尯鍩熷眬閮ㄥ埛鏂颁笉闂鐑侊級 */
 static void __attribute__((unused)) draw_card_pulse(uint16_t x, uint16_t y, uint16_t w, uint8_t selected)
 {
     if (!selected) return;
@@ -200,14 +215,14 @@ static void draw_btn(uint16_t y, const char *label, uint16_t color, uint8_t sele
     if (selected) draw_frame(5, y, 125, BTN_H, UI_ACCENT);
 }
 
-/* 绘制右侧滚动条：total_items=总数, per_page=每页可见数, cursor_pos=当前选中项索引 */
+/* 缁樺埗鍙充晶婊氬姩鏉★細total_items=鎬绘暟, per_page=姣忛〉鍙瑙佹暟, cursor_pos=褰撳墠閫変腑椤圭储寮 */
 static void draw_scrollbar(uint8_t total, uint8_t per_page, uint8_t cursor_pos, uint16_t sy, uint16_t sh)
 {
     if (total <= per_page) return;
     uint8_t thumb_h = (uint16_t)sh * per_page / total;
     if (thumb_h > sh / 2) thumb_h = sh / 2;
     if (thumb_h < 8) thumb_h = 8;
-    /* 滑块位置：选中索引钳位到 [0, total-per_page]，滚动到底时滑块停在轨道末端 */
+    /* 婊戝潡浣嶇疆锛氶変腑绱㈠紩閽充綅鍒 [0, total-per_page]锛屾粴鍔ㄥ埌搴曟椂婊戝潡鍋滃湪杞ㄩ亾鏈绔 */
     uint16_t max_pos = (uint16_t)(total - per_page);
     uint16_t pos = (cursor_pos > max_pos) ? max_pos : cursor_pos;
     uint16_t range = (sh > thumb_h) ? (sh - thumb_h) : 0;
@@ -216,7 +231,7 @@ static void draw_scrollbar(uint8_t total, uint8_t per_page, uint8_t cursor_pos, 
     TFT_FillRect(234, thumb_y, 5, thumb_h, UI_ACCENT);
 }
 
-/* ── 像素滚动：可视区参数 ── */
+/* 鈹鈹 鍍忕礌婊氬姩锛氬彲瑙嗗尯鍙傛暟 鈹鈹 */
 #define SCR_ROW_H    18
 #define SCR_VIEW_Y   36
 #define SCR_VIEW_H   90
@@ -247,8 +262,8 @@ static void draw_icon_temp(uint16_t x, uint16_t y, uint16_t bg)
     TFT_DrawBitmap(x + 2, y + 3, 10, 24, icon_temp_bmp, 0xF81F, bg);
 }
 
-/* 重量哑铃图标（30x30 RGB565 位图，透明色 0xF81F） */
-/* 重量哑铃图标（18x17 RGB565 位图，透明色 0xF81F，主体统一 UI_PURPLE） */
+/* 閲嶉噺鍝戦搩鍥炬爣锛30x30 RGB565 浣嶅浘锛岄忔槑鑹 0xF81F锛 */
+/* 閲嶉噺鍝戦搩鍥炬爣锛18x17 RGB565 浣嶅浘锛岄忔槑鑹 0xF81F锛屼富浣撶粺涓 UI_PURPLE锛 */
 static const uint16_t icon_weight_bmp[306] = {
     0xF81F, 0xF81F, 0x9936, 0x9936, 0x9936, 0x9936, 0x9936, 0x9936, 0x9936, 0x9936, 0x9936, 0x9936, 0x9936, 0x9936, 0x9936, 0x9936,
     0xF81F, 0xF81F, 0xF81F, 0x9936, 0x9936, 0x9936, 0x9936, 0x9936, 0x9936, 0x9936, 0x9936, 0x9936, 0x9936, 0x9936, 0x9936, 0x9936,
@@ -273,13 +288,13 @@ static const uint16_t icon_weight_bmp[306] = {
 };
 
 
-/* 重量哑铃图标（18x17 位图，透明色 0xF81F） */
+/* 閲嶉噺鍝戦搩鍥炬爣锛18x17 浣嶅浘锛岄忔槑鑹 0xF81F锛 */
 static void draw_icon_weight(uint16_t x, uint16_t y, uint16_t bg)
 {
     TFT_DrawBitmap(x, y + 7, 18, 17, icon_weight_bmp, 0xF81F, bg);
 }
 
-/* 湿度水滴图标（14x20 RGB565 位图，透明色 0xF81F） */
+/* 婀垮害姘存淮鍥炬爣锛14x20 RGB565 浣嶅浘锛岄忔槑鑹 0xF81F锛 */
 static const uint16_t icon_humi_bmp[280] = {
     0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0x00E9, 0x0108, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F,
     0xF81F, 0xF81F, 0xF81F, 0x08E8, 0x561C, 0x55FC, 0x1147, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F,
@@ -306,20 +321,20 @@ static void draw_icon_humi(uint16_t x, uint16_t y, uint16_t bg)
     TFT_DrawBitmap(x, y + 5, 14, 20, icon_humi_bmp, 0xF81F, bg);
 }
 
-/* PTC 加热图标（30x30 RGB565 位图，透明色 0xF81F，主体统一 UI_ACCENT2） */
-/* PTC 加热图标（火苗，22x22 RGB565，透明色 0xF81F，保留内部多色） */
-/* PTC 加热图标（火苗，22x22 RGB565，透明色 0xF81F，外壳 UI_ACCENT2+内芯黄） */
-/* PTC 加热图标（火苗，26x26 RGB565，透明色 0xF81F，外圈 UI_ACCENT2 内填黄） */
-/* PTC 加热图标（火苗，26x26 RGB565，透明色 0xF81F，外红中橙内黄） */
-/* PTC 火苗图标（30x30 取模，26x26 绘制，RGB565，透明 0xF81F，外红中橙内黄） */
-/* PTC 火苗图标（30x30 取模，26x26 绘制，RGB565，透明 0xF81F，上红环+橙体+底部小黄） */
-/* PTC 火苗图标（30x30 取模，26x26 绘制，RGB565，透明 0xF81F，红环+橙体+底部 5px 小黄焰） */
-/* PTC 火苗图标（30x30 取模，26x26 绘制，RGB565，透明 0xF81F，红环+橙体+底部 5届黄块） */
-/* PTC 火苗图标（30x30 取模，26x26 绘制，RGB565，透明 0xF81F，红环+橙体+底部等比缩小小火焰） */
-/* PTC 火苗图标（30x30 取模，26x26 绘制，RGB565，透明 0xF81F，红环+橙体+底部外圈+中间圈缩小(黄)） */
-/* PTC 火苗图标（30x30 取模，26x26 绘制，RGB565，透明 0xF81F，红环+橙体+底部等比缩放火焰轮廓(黄)） */
-/* PTC 火苗图标（30x30 取模，26x26 绘制，RGB565，透明 0xF81F，红环+橙体+底部居中缩小火焰(黄实心)） */
-/* PTC 火苗图标（15x21 RGB565，透明 0xF81F） */
+/* PTC 鍔犵儹鍥炬爣锛30x30 RGB565 浣嶅浘锛岄忔槑鑹 0xF81F锛屼富浣撶粺涓 UI_ACCENT2锛 */
+/* PTC 鍔犵儹鍥炬爣锛堢伀鑻楋紝22x22 RGB565锛岄忔槑鑹 0xF81F锛屼繚鐣欏唴閮ㄥ氳壊锛 */
+/* PTC 鍔犵儹鍥炬爣锛堢伀鑻楋紝22x22 RGB565锛岄忔槑鑹 0xF81F锛屽栧３ UI_ACCENT2+鍐呰姱榛勶級 */
+/* PTC 鍔犵儹鍥炬爣锛堢伀鑻楋紝26x26 RGB565锛岄忔槑鑹 0xF81F锛屽栧湀 UI_ACCENT2 鍐呭～榛勶級 */
+/* PTC 鍔犵儹鍥炬爣锛堢伀鑻楋紝26x26 RGB565锛岄忔槑鑹 0xF81F锛屽栫孩涓姗欏唴榛勶級 */
+/* PTC 鐏鑻楀浘鏍囷紙30x30 鍙栨ā锛26x26 缁樺埗锛孯GB565锛岄忔槑 0xF81F锛屽栫孩涓姗欏唴榛勶級 */
+/* PTC 鐏鑻楀浘鏍囷紙30x30 鍙栨ā锛26x26 缁樺埗锛孯GB565锛岄忔槑 0xF81F锛屼笂绾㈢幆+姗欎綋+搴曢儴灏忛粍锛 */
+/* PTC 鐏鑻楀浘鏍囷紙30x30 鍙栨ā锛26x26 缁樺埗锛孯GB565锛岄忔槑 0xF81F锛岀孩鐜+姗欎綋+搴曢儴 5px 灏忛粍鐒帮級 */
+/* PTC 鐏鑻楀浘鏍囷紙30x30 鍙栨ā锛26x26 缁樺埗锛孯GB565锛岄忔槑 0xF81F锛岀孩鐜+姗欎綋+搴曢儴 5灞婇粍鍧楋級 */
+/* PTC 鐏鑻楀浘鏍囷紙30x30 鍙栨ā锛26x26 缁樺埗锛孯GB565锛岄忔槑 0xF81F锛岀孩鐜+姗欎綋+搴曢儴绛夋瘮缂╁皬灏忕伀鐒帮級 */
+/* PTC 鐏鑻楀浘鏍囷紙30x30 鍙栨ā锛26x26 缁樺埗锛孯GB565锛岄忔槑 0xF81F锛岀孩鐜+姗欎綋+搴曢儴澶栧湀+涓闂村湀缂╁皬(榛)锛 */
+/* PTC 鐏鑻楀浘鏍囷紙30x30 鍙栨ā锛26x26 缁樺埗锛孯GB565锛岄忔槑 0xF81F锛岀孩鐜+姗欎綋+搴曢儴绛夋瘮缂╂斁鐏鐒拌疆寤(榛)锛 */
+/* PTC 鐏鑻楀浘鏍囷紙30x30 鍙栨ā锛26x26 缁樺埗锛孯GB565锛岄忔槑 0xF81F锛岀孩鐜+姗欎綋+搴曢儴灞呬腑缂╁皬鐏鐒(榛勫疄蹇)锛 */
+/* PTC 鐏鑻楀浘鏍囷紙15x21 RGB565锛岄忔槑 0xF81F锛 */
 static const uint16_t icon_ptc_bmp[315] = {
     0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF800, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F,
     0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF800, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F,
@@ -356,13 +371,13 @@ static const uint16_t icon_ptc_bmp[315] = {
 
 
 
-/* PTC 加热图标（15x21 位图，透明色 0xF81F） */
+/* PTC 鍔犵儹鍥炬爣锛15x21 浣嶅浘锛岄忔槑鑹 0xF81F锛 */
 static void draw_icon_ptc(uint16_t x, uint16_t y, uint16_t bg)
 {
     TFT_DrawBitmap(x, y + 5, 15, 21, icon_ptc_bmp, 0xF81F, bg);
 }
 
-/* 时钟/烘干时间图标（22x22 RGB565，透明色 0xF81F，100x100原图裁剪缩小） */
+/* 鏃堕挓/鐑樺共鏃堕棿鍥炬爣锛22x22 RGB565锛岄忔槑鑹 0xF81F锛100x100鍘熷浘瑁佸壀缂╁皬锛 */
 static const uint16_t icon_clock_bmp[484] = {
     0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0x9D77, 0x5BD1, 0x124D, 0x122D, 0x120C, 0x09CC, 0x4B50, 0x9515, 0xF81F,
     0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0xF81F, 0x63F1, 0x3B50, 0x1B31, 0x12D0, 0x0A4D,
@@ -415,25 +430,23 @@ static void draw_degree(uint16_t x, uint16_t y, uint16_t color, uint8_t scale)
 
 static void draw_degree(uint16_t x, uint16_t y, uint16_t color, uint8_t scale);
 
-/* 小时:分钟:秒 六位数字的 X 坐标（size 4，每个 24px） */
+/* 灏忔椂:鍒嗛挓:绉 鍏浣嶆暟瀛楃殑 X 鍧愭爣锛坰ize 4锛屾瘡涓 24px锛 */
 static const uint16_t time_digit_x[6] = {20, 50, 94, 124, 168, 198};
 
-/* 设置时间页白色衬底色（比 UI_CARD 略亮，与深色页面底区分）——整绘与局部刷新共用 */
-#define TIME_CARD_BG TFT_COLOR(0xF8, 0xFA, 0xFF)
-
-/* 局部重绘单个时间数字 + 光标框（框紧贴字模字形四面，无多余间隙）
- * 选中态只改光标轮廓颜色，不填充背景 */
+/* 灞閮ㄩ噸缁樺崟涓鏃堕棿鏁板瓧 + 鍏夋爣妗嗭紙妗嗙揣璐村瓧妯″瓧褰㈠洓闈锛屾棤澶氫綑闂撮殭锛
+ * 閫変腑鎬佸彧鏀瑰厜鏍囪疆寤撻滆壊锛屼笉濉鍏呰儗鏅 */
 static void refr_time_digit(uint8_t i, uint16_t txt_color, uint16_t border_color)
 {
     char buf[8];
     uint16_t dx = time_digit_x[i];
-    TFT_FillRect(dx - 2, 50, 26, 35, TIME_CARD_BG);
+    TFT_FillRect(dx - 2, 49, 26, 34, TIME_CARD_BG);
     sprintf(buf, "%d", g_sys.time_digits[i]);
     TFT_DrawString(dx, 52, buf, txt_color, TIME_CARD_BG, 4);
-    if (g_sys.time_cursor == i) draw_frame(dx - 1, 51, 22, 32, border_color);
+    /* 鍏夋爣妗嗭細5x7 瀛楁ā scale4 澧ㄨ抗=52..79(28px)锛岄《妗50-51/搴曟80-81 绱ц创澧ㄨ抗涓婁笅缂 */
+    if (g_sys.time_cursor == i) draw_frame(dx - 2, 50, 24, 32, border_color);
 }
 
-/* 选项页右侧数值 + ℃，值右对齐到 x=190 前（避开左侧标签，消除重叠） */
+/* 閫夐」椤靛彸渚ф暟鍊 + 鈩冿紝鍊煎彸瀵归綈鍒 x=190 鍓嶏紙閬垮紑宸︿晶鏍囩撅紝娑堥櫎閲嶅彔锛 */
 static void draw_val_deg(uint16_t y, const char *s, uint16_t color)
 {
     uint8_t len = (uint8_t)strlen(s);
@@ -450,7 +463,7 @@ static void __attribute__((unused)) draw_card_bg(uint16_t y, uint16_t accent_col
     TFT_FillRect(ACCENT_W, y, TFT_WIDTH - ACCENT_W, CARD_H, UI_BG);
 }
 
-/* 横屏卡片背景（可指定坐标/尺寸），sgl 风格：深色卡片 + 顶边高亮 */
+/* 妯灞忓崱鐗囪儗鏅锛堝彲鎸囧畾鍧愭爣/灏哄革級锛宻gl 椋庢牸锛氭繁鑹插崱鐗 + 椤惰竟楂樹寒 */
 static void __attribute__((unused)) draw_card_bg_at(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t accent_color)
 {
     TFT_FillRect(x, y, w, h, UI_CARD);
@@ -458,7 +471,7 @@ static void __attribute__((unused)) draw_card_bg_at(uint16_t x, uint16_t y, uint
     TFT_FillRect(x, y + h - 2, w, 2, accent_color); /* 底部色条 */
 }
 
-/* ── 开机进度条（横向药丸形，30,92 180x14，半径=半高7） ── */
+/* 鈹鈹 寮鏈鸿繘搴︽潯锛堟í鍚戣嵂涓稿舰锛30,92 180x14锛屽崐寰=鍗婇珮7锛 鈹鈹 */
 #define PB_X   30U
 #define PB_Y   92U
 #define PB_W   180U
@@ -468,7 +481,7 @@ void UI_ShowBootScreen(void)
 {
     TFT_FillScreen(UI_BG);
 
-    /* 主标题 QIMINGXING（scale=4 白色） */
+    /* 涓绘爣棰 QIMINGXING锛坰cale=4 鐧借壊锛 */
     {
         const char *title = "QIMINGXING";
         uint16_t tw = (uint16_t)(strlen(title) * 24U);
@@ -476,7 +489,7 @@ void UI_ShowBootScreen(void)
                        TFT_COLOR(0xFF, 0xFF, 0xFF), UI_BG, 4);
     }
 
-    /* 副标题 */
+    /* 鍓鏍囬 */
     {
         const char *sub = "Drying Control System";
         uint16_t sw = (uint16_t)(strlen(sub) * 6U);
@@ -484,7 +497,7 @@ void UI_ShowBootScreen(void)
                        TFT_COLOR(0x7F, 0x84, 0x9C), UI_BG, 1);
     }
 
-    /* 进度条（轨道 30,92 180x14 r7 药丸形） */
+    /* 杩涘害鏉★紙杞ㄩ亾 30,92 180x14 r7 鑽涓稿舰锛 */
     uint16_t pb_bg = TFT_COLOR(0x6A, 0x6E, 0x88);
     uint16_t pb_fg = TFT_COLOR(0xF5, 0xA6, 0x23);
     fill_round_rect(PB_X, PB_Y, PB_W, PB_H, pb_bg, 7);
@@ -495,19 +508,19 @@ void UI_ShowBootScreen(void)
     uint16_t pctx = (uint16_t)(srx + 13U * 6U);
     TFT_DrawString(srx, sry, "system ready ", TFT_COLOR(0x7F, 0x84, 0x9C), UI_BG, 1);
 
-    /* 后台读取传感器 + 风扇安全（不显示数值） */
+    /* 鍚庡彴璇诲彇浼犳劅鍣 + 椋庢墖瀹夊叏锛堜笉鏄剧ず鏁板硷級 */
     uint8_t fan_cooling = 0;
 
     for (int pct = 0; pct <= 100; pct += 2) {
         uint16_t fw = (uint16_t)((uint32_t)PB_W * (uint32_t)pct / 100U);
-        if (fw > 0U && fw < 14U) fw = 14U;   /* 最小显示宽度=圆头直径，左端从第一帧起就是圆角 */
+        if (fw > 0U && fw < 14U) fw = 14U;   /* 鏈灏忔樉绀哄藉害=鍦嗗ご鐩村緞锛屽乏绔浠庣涓甯ц捣灏辨槸鍦嗚 */
         if (fw > 0U) fill_round_rect(PB_X, PB_Y, fw, PB_H, pb_fg, 7);
 
         TFT_FillRect(pctx, sry, 4U * 6U, 8U, UI_BG);
         sprintf(buf, "%d%%", pct);
         TFT_DrawString(pctx, sry, buf, TFT_COLOR(0x7F, 0x84, 0x9C), UI_BG, 1);
 
-        /* 30% 时读传感器 + 检查 NTC 是否需要散热 */
+        /* 30% 鏃惰讳紶鎰熷櫒 + 妫鏌 NTC 鏄�鍚﹂渶瑕佹暎鐑 */
         if (pct == 30) {
             float t, h;
             if (AHT20_Read(&t, &h) == 0) {
@@ -516,24 +529,24 @@ void UI_ShowBootScreen(void)
             }
             g_sys.ptc_temp = (float)NTC_GetTemperature() / 10.0f;
 
-            /* 开机自动去皮 + 读取重量，屏幕亮起前卡片即有读数 */
+            /* 寮鏈鸿嚜鍔ㄥ幓鐨 + 璇诲彇閲嶉噺锛屽睆骞曚寒璧峰墠鍗＄墖鍗虫湁璇绘暟 */
             CS1237_Tare();
             {
                 float w = CS1237_ReadWeight();
                 if (w > -1000.0f) g_sys.weight_g = (int32_t)(w + ((w >= 0.0f) ? 0.5f : -0.5f));
             }
 
-            /* 只检测 NTC 温度 > 冷却温度 → 开风扇 */
+            /* 鍙妫娴 NTC 娓╁害 > 鍐峰嵈娓╁害 鈫 寮椋庢墖 */
             if (g_sys.ptc_temp > (float)g_sys.params.ptc_cooling_temp) {
                 Fan_SetSpeed(100);
                 fan_cooling = 1;
             }
         }
 
-        /* 60% 时重试温湿度（30% 若失败再试一次，确保 I2C 读条期间完成） */
+        /* 60% 鏃堕噸璇曟俯婀垮害锛30% 鑻ュけ璐ュ啀璇曚竴娆★紝纭淇 I2C 璇绘潯鏈熼棿瀹屾垚锛 */
         if (pct == 60) {
             float t, h;
-            /* 开机去皮重试：芯片上电建立需若干转换周期，30% 若样本不足未成零位，这里再试一次 */
+            /* 寮鏈哄幓鐨閲嶈瘯锛氳姱鐗囦笂鐢靛缓绔嬮渶鑻ュ共杞鎹㈠懆鏈燂紝30% 鑻ユ牱鏈涓嶈冻鏈鎴愰浂浣嶏紝杩欓噷鍐嶈瘯涓娆 */
             {
                 float w0 = CS1237_ReadWeight();
                 if (w0 < -1000.0f || w0 > 6000.0f || w0 < -20.0f) {
@@ -548,7 +561,7 @@ void UI_ShowBootScreen(void)
             }
         }
 
-        /* 70% 时复查 NTC */
+        /* 70% 鏃跺嶆煡 NTC */
         if (pct == 70 && fan_cooling) {
             g_sys.ptc_temp = (float)NTC_GetTemperature() / 10.0f;
             if (g_sys.ptc_temp <= (float)g_sys.params.ptc_cooling_temp) {
@@ -566,7 +579,7 @@ void UI_ShowBootScreen(void)
     Delay_ms(80);
 }
 
-/* 通用横屏标题栏：无背景色带，仅分隔线 + 居中标题 */
+/* 閫氱敤妯灞忔爣棰樻爮锛氭棤鑳屾櫙鑹插甫锛屼粎鍒嗛殧绾 + 灞呬腑鏍囬 */
 static void __attribute__((unused)) draw_page_title(const char *title, uint16_t accent)
 {
     TFT_FillRect(0, 24, TFT_WIDTH, 1, UI_CARD_EDGE);
@@ -574,7 +587,7 @@ static void __attribute__((unused)) draw_page_title(const char *title, uint16_t 
                    6, title, accent, UI_BG, 2);
 }
 
-/* UTF-8 混合字符串渲染宽度(TFT_DrawStringZh 布局): 中文=17px, ASCII=16px */
+/* UTF-8 娣峰悎瀛楃︿覆娓叉煋瀹藉害(TFT_DrawStringZh 甯冨眬): 涓鏂=17px, ASCII=16px */
 static uint16_t zh_str_width(const char *s)
 {
     uint16_t w = 0;
@@ -586,16 +599,16 @@ static uint16_t zh_str_width(const char *s)
     return w;
 }
 
-/* 中文标题栏：深色底 + 分隔线 + 按中文宽度居中 */
+/* 涓鏂囨爣棰樻爮锛氭繁鑹插簳 + 鍒嗛殧绾 + 鎸変腑鏂囧藉害灞呬腑 */
 static void draw_page_title_zh(const char *title, uint16_t accent)
 {
-    /* 无背景色带：标题文字直接写在 UI_BG 上，仅保留底部 1px 分隔线 */
+    /* 鏃犺儗鏅鑹插甫锛氭爣棰樻枃瀛楃洿鎺ュ啓鍦 UI_BG 涓婏紝浠呬繚鐣欏簳閮 1px 鍒嗛殧绾 */
     TFT_FillRect(0, 24, TFT_WIDTH, 1, UI_CARD_EDGE);
     TFT_DrawStringZh((TFT_WIDTH - zh_str_width(title)) / 2U, 6, title, accent, UI_BG);
 }
 
-/* 主界面 5 张卡片（横屏 240x135）：4 张 117x42 + 底部 236x43
- * 左上角为原点，X 向右为正，Y 向下为正，卡片左上角为参考中心 */
+/* 涓荤晫闈 5 寮犲崱鐗囷紙妯灞 240x135锛夛細4 寮 117x42 + 搴曢儴 236x43
+ * 宸︿笂瑙掍负鍘熺偣锛孹 鍚戝彸涓烘ｏ紝Y 鍚戜笅涓烘ｏ紝鍗＄墖宸︿笂瑙掍负鍙傝冧腑蹇 */
 static void main_card_rect(uint8_t item, uint16_t *x, uint16_t *y, uint16_t *w, uint16_t *h)
 {
     switch (item) {
@@ -603,21 +616,21 @@ static void main_card_rect(uint8_t item, uint16_t *x, uint16_t *y, uint16_t *w, 
     case 1: *x = 121; *y = 2;   break;             /* 湿度 */
     case 2: *x = 2;   *y = 46;  break;             /* WEIGHT */
     case 3: *x = 121; *y = 46;  break;             /* PTC */
-    default:*x = 2;   *y = 90;  *w = 236; *h = 43; return; /* 时间栏 */
+    default:*x = 2;   *y = 90;  *w = 236; *h = 43; return; /* 鏃堕棿鏍 */
     }
     *w = 117;
     *h = 42;
 }
 
-/* 重量显示整数值：int 变量，允许负数直接显示 */
+/* 閲嶉噺鏄剧ず鏁存暟鍊硷細int 鍙橀噺锛屽厑璁歌礋鏁扮洿鎺ユ樉绀 */
 static int32_t fmt_weight_g(void)
 {
     return g_sys.weight_g;
 }
 
-/* 绘制数值+单位（size2 与数字同字号），紧跟数值后，供全屏与局部刷新共用。
- * 数值+单位组在卡片文本区(x+32..x+112)内水平居中；每帧先清整个区（含 ° 顶行），
- * 值变短时不留残影，单位/℃ 自动贴值动态跟随。 */
+/* 缁樺埗鏁板+鍗曚綅锛坰ize2 涓庢暟瀛楀悓瀛楀彿锛夛紝绱ц窡鏁板煎悗锛屼緵鍏ㄥ睆涓庡眬閮ㄥ埛鏂板叡鐢ㄣ
+ * 鏁板+鍗曚綅缁勫湪鍗＄墖鏂囨湰鍖(x+32..x+112)鍐呮按骞冲眳涓锛涙瘡甯у厛娓呮暣涓鍖猴紙鍚� 掳 椤惰岋級锛
+ * 鍊煎彉鐭鏃朵笉鐣欐畫褰憋紝鍗曚綅/鈩 鑷鍔ㄨ创鍊煎姩鎬佽窡闅忋 */
 static void draw_value_unit(uint8_t item, uint16_t x, uint16_t y, uint16_t h,
                             uint16_t bg, const char *value, uint16_t val_color)
 {
@@ -629,7 +642,7 @@ static void draw_value_unit(uint8_t item, uint16_t x, uint16_t y, uint16_t h,
 
     vw = (uint16_t)(strlen(value) * 12U);
 
-    /* 组宽：数值 + 4px 间隙 + 单个单位字符(除湿度已含%外) */
+    /* 缁勫斤細鏁板 + 4px 闂撮殭 + 鍗曚釜鍗曚綅瀛楃(闄ゆ箍搴﹀凡鍚�%澶) */
     group_w = (item == 1U) ? vw : (uint16_t)(vw + 16U);
     left  = (uint16_t)(x + 32U);
     right = (uint16_t)(x + 112U);
@@ -637,7 +650,7 @@ static void draw_value_unit(uint8_t item, uint16_t x, uint16_t y, uint16_t h,
     else vx = (uint16_t)(left + ((uint16_t)(right - left) - group_w) / 2U);
     ux = (uint16_t)(vx + vw + 4U);
 
-    /* 清屏区固定从 left 起（值变短重居中时旧值左侧也不会残留），向上含 ° 顶行 */
+    /* 娓呭睆鍖哄浐瀹氫粠 left 璧凤紙鍊煎彉鐭閲嶅眳涓鏃舵棫鍊煎乏渚т篃涓嶄細娈嬬暀锛夛紝鍚戜笂鍚� 掳 椤惰 */
     TFT_FillRect(left, (uint16_t)(vy - 1), (uint16_t)(x + 114U - left), 17U, bg);
 
     TFT_DrawString(vx, vy, value, val_color, bg, 2);
@@ -656,7 +669,7 @@ static void draw_value_unit(uint8_t item, uint16_t x, uint16_t y, uint16_t h,
     }
 }
 
-/* 绘制单张主界面卡片：大图标(左) + 数值+单位(右)，单位与数字同字号(size2) */
+/* 缁樺埗鍗曞紶涓荤晫闈㈠崱鐗囷細澶у浘鏍(宸) + 鏁板+鍗曚綅(鍙)锛屽崟浣嶄笌鏁板瓧鍚屽瓧鍙(size2) */
 static void draw_main_card(uint8_t item, uint16_t x, uint16_t y,
                            uint16_t w, uint16_t h, uint16_t bg,
                            const char *value,
@@ -665,11 +678,11 @@ static void draw_main_card(uint8_t item, uint16_t x, uint16_t y,
     uint16_t fill = selected ? UI_CARD_HI : bg;
     uint8_t icon_x, icon_y;
 
-    /* 整卡单层圆角填充 + 圆角描边，内部平铺无嵌套圆弧 */
+    /* 鏁村崱鍗曞眰鍦嗚掑～鍏 + 鍦嗚掓弿杈癸紝鍐呴儴骞抽摵鏃犲祵濂楀渾寮 */
     fill_round_rect(x, y, w, h, fill, 10);
     draw_round_outline(x, y, w, h, selected ? UI_ACCENT : UI_CARD_EDGE, 10, 2);
 
-    /* 图标 30x30：距卡片左边缘 6px（略偏右），垂直居中 */
+    /* 鍥炬爣 30x30锛氳窛鍗＄墖宸﹁竟缂 6px锛堢暐鍋忓彸锛夛紝鍨傜洿灞呬腑 */
     icon_x = (uint8_t)(x + 6);
     icon_y = (uint8_t)(y + (h - 30U) / 2U);
     switch (item) {
@@ -683,12 +696,12 @@ static void draw_main_card(uint8_t item, uint16_t x, uint16_t y,
     draw_value_unit(item, x, y, h, fill, value, val_color);
 }
 
-/* 局部刷新单张主界面卡片（不整屏重绘，SGL 脏矩形思路） */
+/* 灞閮ㄥ埛鏂板崟寮犱富鐣岄潰鍗＄墖锛堜笉鏁村睆閲嶇粯锛孲GL 鑴忕煩褰㈡濊矾锛 */
 void UI_RefreshCard(uint8_t item)
 {
     char buf[32];
     uint16_t x, y, w, h;
-    if (item > 4) return;   /* 防止菜单泄漏的越界索引画出错误卡片 */
+    if (item > 4) return;   /* 闃叉㈣彍鍗曟硠婕忕殑瓒婄晫绱㈠紩鐢诲嚭閿欒鍗＄墖 */
     main_card_rect(item, &x, &y, &w, &h);
 
     if (item == 4) {
@@ -703,7 +716,7 @@ void UI_RefreshCard(uint8_t item)
         mm = (g_sys.params.dry_time_sec % 3600) / 60;
         ss = g_sys.params.dry_time_sec % 60;
         if (g_sys.run_state == STATE_DRYING || g_sys.run_state == STATE_COOLING) {
-            /* 烘干中：主显示剩余倒计时（大字），上方不再放设定小字避免与状态文字重叠 */
+            /* 鐑樺共涓锛氫富鏄剧ず鍓╀綑鍊掕℃椂锛堝ぇ瀛楋級锛屼笂鏂逛笉鍐嶆斁璁惧畾灏忓瓧閬垮厤涓庣姸鎬佹枃瀛楅噸鍙 */
             hh = g_sys.remaining_sec / 3600;
             mm = (g_sys.remaining_sec % 3600) / 60;
             ss = g_sys.remaining_sec % 60;
@@ -752,27 +765,27 @@ void UI_DrawMainScreen(void)
 
     TFT_FillScreen(UI_BG);
 
-    /* ── 卡1 TEMP 117x42 @(2,2) ── */
+    /* 鈹鈹 鍗1 TEMP 117x42 @(2,2) 鈹鈹 */
     sprintf(buf, "%.1f", g_sys.current_temp);
     draw_main_card(0, 2, 2, 117, 42, CARD_BG_TEMP, buf, UI_WARN,
                    g_sys.selected_item == 0);
 
-    /* ── 卡2 湿度 117x42 @(121,2) ── */
+    /* 鈹鈹 鍗2 婀垮害 117x42 @(121,2) 鈹鈹 */
     sprintf(buf, "%.1f%%", g_sys.current_humidity);
     draw_main_card(1, 121, 2, 117, 42, CARD_BG_HUMI, buf, UI_CYAN,
                    g_sys.selected_item == 1);
 
-    /* ── 卡3 WEIGHT 117x42 @(2,46) ── */
+    /* 鈹鈹 鍗3 WEIGHT 117x42 @(2,46) 鈹鈹 */
     sprintf(buf, "%d", (int)fmt_weight_g());
     draw_main_card(2, 2, 46, 117, 42, CARD_BG_WEIGHT, buf, UI_PURPLE,
                    g_sys.selected_item == 2);
 
-    /* ── 卡4 PTC 117x42 @(121,46) ── */
+    /* 鈹鈹 鍗4 PTC 117x42 @(121,46) 鈹鈹 */
     sprintf(buf, "%d", (int)(g_sys.ptc_temp + 0.5f));
     draw_main_card(3, 121, 46, 117, 42, CARD_BG_PTC, buf,
                    UI_ACCENT2, g_sys.selected_item == 3);
 
-    /* ── 第5卡片：烘干时间 236x43 @(2,90) ── */
+    /* 鈹鈹 绗5鍗＄墖锛氱儤骞叉椂闂 236x43 @(2,90) 鈹鈹 */
     cy = 90;
     fill_round_rect(2, cy, 236, 43,
                     (g_sys.selected_item == 4) ? UI_CARD_HI : CARD_BG_TIME, 10);
@@ -884,7 +897,7 @@ static void refresh_temp_adj_sel(uint8_t old_idx, uint8_t new_idx)
     }
 }
 
-static void draw_tune_live(void);   /* 校准页实时温度 AIR/PTC（定义在 1300 行附近） */
+static void draw_tune_live(void);   /* 鏍″噯椤靛疄鏃舵俯搴 AIR/PTC锛堝畾涔夊湪 1300 琛岄檮杩戯級 */
 
 void UI_DrawTempPid(void)
 {
@@ -892,49 +905,49 @@ void UI_DrawTempPid(void)
     TFT_FillScreen(UI_BG);
     draw_page_title_zh("温度PID", UI_WARN);
     sprintf(buf, "温度 %d", g_sys.params.target_temp);
-    TFT_DrawStringZh((TFT_WIDTH - zh_str_width(buf)) / 2U, 40, buf, COLOR_ORANGE, UI_BG);
-    draw_degree(116, 40, COLOR_ORANGE, 2);
+    TFT_DrawStringZh((TFT_WIDTH - zh_str_width(buf)) / 2U, 24, buf, COLOR_ORANGE, UI_BG);
+    draw_degree(116, 24, COLOR_ORANGE, 2);
     if (g_sys.temp_pid_running) {
-        TFT_DrawStringZh((TFT_WIDTH - zh_str_width("校准中，单击返回")) / 2U, 65, "校准中，单击返回", COLOR_YELLOW, UI_BG);
-        TFT_FillRect(40, 95, 160, 2, COLOR_WHITE);
-        TFT_FillRect(40, 107, 160, 2, COLOR_WHITE);
-        TFT_FillRect(40, 95, 2, 14, COLOR_WHITE);
-        TFT_FillRect(198, 95, 2, 14, COLOR_WHITE);
+        TFT_DrawStringZh((TFT_WIDTH - zh_str_width("校准后单击返回")) / 2U, 46, "校准后单击返回", COLOR_YELLOW, UI_BG);
+        TFT_FillRect(40, 66, 160, 2, COLOR_WHITE);
+        TFT_FillRect(40, 78, 160, 2, COLOR_WHITE);
+        TFT_FillRect(40, 66, 2, 14, COLOR_WHITE);
+        TFT_FillRect(198, 66, 2, 14, COLOR_WHITE);
         uint8_t pct = g_sys.temp_pid_progress;
-        TFT_FillRect(42, 97, (uint16_t)(156U * pct / 100U), 10, COLOR_GREEN);
+        TFT_FillRect(42, 68, (uint16_t)(156U * pct / 100U), 10, COLOR_GREEN);
         sprintf(buf, "%d%%", pct);
-        TFT_DrawString((TFT_WIDTH - (uint16_t)(strlen(buf) * 12U)) / 2U, 115, buf, UI_TEXT, UI_BG, 2);
+        TFT_DrawString((TFT_WIDTH - (uint16_t)(strlen(buf) * 12U)) / 2U, 86, buf, UI_TEXT, UI_BG, 2);
     } else {
-        TFT_DrawStringZh((TFT_WIDTH - zh_str_width("单击开始校准")) / 2U, 65, "单击开始校准", COLOR_YELLOW, UI_BG);
+        TFT_DrawStringZh((TFT_WIDTH - zh_str_width("单击开始校准")) / 2U, 46, "单击开始校准", COLOR_YELLOW, UI_BG);
         sprintf(buf, "KP:%.2f KI:%.2f KD:%.2f", g_sys.params.pid_air_kp, g_sys.params.pid_air_ki, g_sys.params.pid_air_kd);
-        TFT_DrawString((TFT_WIDTH - (uint16_t)(strlen(buf) * 12U)) / 2U, 95, buf, COLOR_CYAN, UI_BG, 2);
+        TFT_DrawString((TFT_WIDTH - (uint16_t)(strlen(buf) * 12U)) / 2U, 86, buf, COLOR_CYAN, UI_BG, 2);
     }
     draw_tune_live();
-    draw_btn(160, "  退出", UI_TEXT_DIM, g_sys.selected_item == 0);
-    if (g_sys.selected_item == 0) draw_frame(5, 160, 125, BTN_H, UI_ACCENT);
 }
 
 void UI_DrawTimeAdjust(void)
 {
     char buf[8];
     uint8_t i;
-    const uint16_t card_bg = TIME_CARD_BG;   /* 比 UI_CARD 提亮一点，与页面深色底区分、局部刷新同色 */
+    const uint16_t card_bg = TIME_CARD_BG;   /* 姣 UI_CARD 鎻愪寒涓鐐癸紝涓庨〉闈㈡繁鑹插簳鍖哄垎銆佸眬閮ㄥ埛鏂板悓鑹 */
     TFT_FillScreen(UI_BG);
     draw_page_title_zh("设置时间", UI_ACCENT);
-    fill_round_rect(8, 48, 224, 40, card_bg, 8);
+    /* 闈㈡澘鎸夋暟瀛(ink 52..79, 涓蹇65.5)鍨傜洿灞呬腑锛46..86 */
+    fill_round_rect(8, 46, 224, 40, card_bg, 8);
     for (i = 0; i < 6; i++) {
         sprintf(buf, "%d", g_sys.time_digits[i]);
         TFT_DrawString(time_digit_x[i], 52, buf, COLOR_CYAN, card_bg, 4);
         if (g_sys.time_cursor == i) {
-            /* 选中态只改光标轮廓颜色，不填充背景；未选中态用普通轮廓 */
-            draw_frame(time_digit_x[i] - 1, 51, 22, 32, g_sys.time_edit_active ? COLOR_ORANGE : UI_ACCENT2);
+            /* 鍏夋爣妗嗭細5x7 瀛楁ā scale4 澧ㄨ抗=52..79(28px)锛岄《妗50-51/搴曟80-81 绱ц创澧ㄨ抗涓婁笅缂 */
+            draw_frame(time_digit_x[i] - 2, 50, 24, 32, g_sys.time_edit_active ? COLOR_ORANGE : UI_ACCENT2);
         }
     }
-    TFT_FillRect(78, 58, 8, 8, UI_ACCENT2);
-    TFT_FillRect(78, 70, 8, 8, UI_ACCENT2);
-    TFT_FillRect(152, 58, 8, 8, UI_ACCENT2);
-    TFT_FillRect(152, 70, 8, 8, UI_ACCENT2);
-    /* 底部居中显示当前预设名称：当前烘干预设为：XXX（标签用黄色，暗底清晰） */
+    /* 鍐掑彿涓ょ偣锛氫腑蹇冨瑰噯鏁板瓧 ink 涓鐐 65.5锛55..62 / 67..74锛 */
+    TFT_FillRect(78, 55, 8, 8, UI_ACCENT2);
+    TFT_FillRect(78, 67, 8, 8, UI_ACCENT2);
+    TFT_FillRect(152, 55, 8, 8, UI_ACCENT2);
+    TFT_FillRect(152, 67, 8, 8, UI_ACCENT2);
+    /* 搴曢儴灞呬腑鏄剧ず褰撳墠棰勮惧悕绉帮細褰撳墠鐑樺共棰勮�井句负锛殮XXX锛堟爣绛剧敤榛勮壊锛屾殫搴曟竻鏅帮級 */
     {
         static const char *lbl = "当前烘干预设为：";
         const char *nm = "PETG";
@@ -1034,27 +1047,25 @@ void UI_DrawPidAutotune(void)
     TFT_FillScreen(UI_BG);
     draw_page_title_zh("PID自动校准", UI_ACCENT2);
     if (g_sys.pid_autotune_running) {
-        TFT_DrawStringZh((TFT_WIDTH - zh_str_width("校准中，单击返回")) / 2U, 45, "校准中，单击返回", COLOR_YELLOW, UI_BG);
-        TFT_FillRect(40, 80, 160, 2, COLOR_WHITE);
-        TFT_FillRect(40, 92, 160, 2, COLOR_WHITE);
-        TFT_FillRect(40, 80, 2, 14, COLOR_WHITE);
-        TFT_FillRect(198, 80, 2, 14, COLOR_WHITE);
+        TFT_DrawStringZh((TFT_WIDTH - zh_str_width("校准后单击返回")) / 2U, 46, "校准后单击返回", COLOR_YELLOW, UI_BG);
+        TFT_FillRect(40, 66, 160, 2, COLOR_WHITE);
+        TFT_FillRect(40, 78, 160, 2, COLOR_WHITE);
+        TFT_FillRect(40, 66, 2, 14, COLOR_WHITE);
+        TFT_FillRect(198, 66, 2, 14, COLOR_WHITE);
         uint8_t pct = g_sys.pid_autotune_progress;
-        TFT_FillRect(42, 82, (uint16_t)(156U * pct / 100U), 10, COLOR_GREEN);
+        TFT_FillRect(42, 68, (uint16_t)(156U * pct / 100U), 10, COLOR_GREEN);
         sprintf(buf, "%d%%", pct);
-        TFT_DrawString((TFT_WIDTH - (uint16_t)(strlen(buf) * 12U)) / 2U, 100, buf, UI_TEXT, UI_BG, 2);
+        TFT_DrawString((TFT_WIDTH - (uint16_t)(strlen(buf) * 12U)) / 2U, 86, buf, UI_TEXT, UI_BG, 2);
     } else {
-        TFT_DrawStringZh((TFT_WIDTH - zh_str_width("单击开始校准")) / 2U, 45, "单击开始校准", COLOR_YELLOW, UI_BG);
+        TFT_DrawStringZh((TFT_WIDTH - zh_str_width("单击开始校准")) / 2U, 46, "单击开始校准", COLOR_YELLOW, UI_BG);
         sprintf(buf, "KP:%.2f KI:%.2f KD:%.2f", g_sys.params.pid_ntc_kp, g_sys.params.pid_ntc_ki, g_sys.params.pid_ntc_kd);
-        TFT_DrawString((TFT_WIDTH - (uint16_t)(strlen(buf) * 12U)) / 2U, 75, buf, COLOR_CYAN, UI_BG, 2);
+        TFT_DrawString((TFT_WIDTH - (uint16_t)(strlen(buf) * 12U)) / 2U, 86, buf, COLOR_CYAN, UI_BG, 2);
     }
     draw_tune_live();
-    draw_btn(160, "  退出", UI_TEXT_DIM, g_sys.selected_item == 0);
-    if (g_sys.selected_item == 0) draw_frame(5, 160, 125, BTN_H, UI_ACCENT);
 }
 
-/* PID 调整页数据源：从 PTC 页进入(pid_return_screen=1)编辑元件 PID，从温度页进入编辑空气 PID。
- * 以前恒用 pid_air_*，PTC 校准写入 pid_ntc_* 后页面仍显示空气默认值，"看起来没写入"。 */
+/* PID 璋冩暣椤垫暟鎹婧愶細浠 PTC 椤佃繘鍏(pid_return_screen=1)缂栬緫鍏冧欢 PID锛屼粠娓╁害椤佃繘鍏ョ紪杈戠┖姘 PID銆
+ * 浠ュ墠鎭掔敤 pid_air_*锛孭TC 鏍″噯鍐欏叆 pid_ntc_* 鍚庨〉闈浠嶆樉绀虹┖姘旈粯璁ゅ硷紝"看起来没写入"銆 */
 static float *pid_row_val(uint8_t row)
 {
     if (g_sys.pid_return_screen) {
@@ -1063,8 +1074,8 @@ static float *pid_row_val(uint8_t row)
     return row == 0 ? &g_sys.params.pid_air_kp : row == 1 ? &g_sys.params.pid_air_ki : &g_sys.params.pid_air_kd;
 }
 
-/* PID 调整页：KP/KI/KD 三个值直接显示，单击选中后旋转直接改（步进0.1+加速），
- * 再单击退出该项并后台保存；第4项"返回"退回来源页。 */
+/* PID 璋冩暣椤碉細KP/KI/KD 涓変釜鍊肩洿鎺ユ樉绀猴紝鍗曞嚮閫変腑鍚庢棆杞鐩存帴鏀癸紙姝ヨ繘0.1+鍔犻燂級锛
+ * 鍐嶅崟鍑婚鍑鸿ラ」骞跺悗鍙颁繚瀛橈紱绗4椤"返回"閫鍥炴潵婧愰〉銆 */
 void UI_DrawPidAdjust(void)
 {
     char buf[24];
@@ -1093,13 +1104,13 @@ void UI_DrawPidAdjust(void)
     }
 }
 
-/* 预设编辑页指针 */
+/* 棰勮�剧紪杈憫椤垫寚閽� */
 static Preset_t *ui_preset_ptr(void)
 {
     return &g_sys.params.presets[g_sys.preset_edit_idx];
 }
 
-/* 确认弹窗（YES/NO 光标选择；是/否字模未提供前用 ASCII） */
+/* 纭璁ゅ脊绐楋紙YES/NO 鍏夋爣閫夋嫨锛涙槸/鍚﹀瓧妯℃湭鎻愪緵鍓嶇敤 ASCII锛 */
 static void draw_confirm_popup(const char *msg)
 {
     uint16_t pw = 180, ph = 86;
@@ -1110,16 +1121,16 @@ static void draw_confirm_popup(const char *msg)
     TFT_DrawStringZh((TFT_WIDTH - zh_str_width(msg)) / 2U, (uint16_t)(py + 14), msg, UI_TEXT, UI_CARD);
     if (g_sys.preset_confirm_yes) {
         fill_round_rect((uint16_t)(px + 20), (uint16_t)(py + 52), 64, 22, COLOR_GREEN, 7);
-        TFT_DrawStringZh((uint16_t)(px + 20 + (64U - zh_str_width("是")) / 2U), (uint16_t)(py + 56), "是", UI_TEXT, COLOR_GREEN);
-        TFT_DrawStringZh((uint16_t)(px + 96 + (64U - zh_str_width("否")) / 2U), (uint16_t)(py + 56), "否", UI_TEXT_DIM, UI_CARD);
+        TFT_DrawStringZh((uint16_t)(px + 20 + (64U - zh_str_width("是")) / 2U), (uint16_t)(py + 55), "是", UI_TEXT, COLOR_GREEN);
+        TFT_DrawStringZh((uint16_t)(px + 96 + (64U - zh_str_width("否")) / 2U), (uint16_t)(py + 55), "否", UI_TEXT_DIM, UI_CARD);
     } else {
-        TFT_DrawStringZh((uint16_t)(px + 20 + (64U - zh_str_width("是")) / 2U), (uint16_t)(py + 56), "是", UI_TEXT_DIM, UI_CARD);
+        TFT_DrawStringZh((uint16_t)(px + 20 + (64U - zh_str_width("是")) / 2U), (uint16_t)(py + 55), "是", UI_TEXT_DIM, UI_CARD);
         fill_round_rect((uint16_t)(px + 96), (uint16_t)(py + 52), 64, 22, UI_ACCENT, 7);
-        TFT_DrawStringZh((uint16_t)(px + 96 + (64U - zh_str_width("否")) / 2U), (uint16_t)(py + 56), "否", UI_TEXT, UI_ACCENT);
+        TFT_DrawStringZh((uint16_t)(px + 96 + (64U - zh_str_width("否")) / 2U), (uint16_t)(py + 55), "否", UI_TEXT, UI_ACCENT);
     }
 }
 
-/* 预设列表单行绘制（二级列表页：预设行 + 末尾退出行） */
+/* 棰勮惧垪琛ㄥ崟琛岀粯鍒讹紙浜岀骇鍒楄〃椤碉細棰勮捐 + 鏈灏鹃鍑鸿岋級 */
 static void draw_preset_row(uint8_t i)
 {
     uint16_t y = (uint16_t)(36 + ((int16_t)i - (int16_t)(g_sys.pixel_offset / 20)) * 20);
@@ -1136,7 +1147,7 @@ static void draw_preset_row(uint8_t i)
             TFT_FillRect(8, y, 224, 18, UI_BG);   /* 先清除旧高亮残留 */
             TFT_DrawStringZh(18, (uint16_t)(y + 1), buf, (i == g_sys.params.current_preset) ? COLOR_CYAN : UI_TEXT_DIM, UI_BG);
         }
-    } else {   /* 退出行 */
+    } else {   /* 閫�鍑汉� */
         if (g_sys.selected_item == i) {
             fill_round_rect(8, y, 224, 18, UI_ACCENT, 7);
             TFT_DrawStringZh(18, (uint16_t)(y + 1), "退出", UI_TEXT, UI_ACCENT);
@@ -1147,7 +1158,7 @@ static void draw_preset_row(uint8_t i)
     }
 }
 
-/* 预设列表可视区整区重绘（滚动用，不整屏刷新） */
+/* 棰勮惧垪琛ㄥ彲瑙嗗尯鏁村尯閲嶇粯锛堟粴鍔ㄧ敤锛屼笉鏁村睆鍒锋柊锛 */
 static void preset_redraw_viewport(void)
 {
     uint8_t i, cnt, so;
@@ -1158,10 +1169,10 @@ static void preset_redraw_viewport(void)
     draw_scrollbar(cnt, 5, so, 36, 100);
 }
 
-/* 耗材预设主菜单页：编辑预设 / 新增预设 / 删除预设 / 退出 */
+/* 鑰楁潗棰勮句富鑿滃崟椤碉細缂栬緫棰勮�� / 鏂板缓棰勮�� / 鍒犻櫎棰勮�� / 閫�鍑� */
 void UI_DrawPresetMenu(void)
 {
-    static const char *const kRows[4] = {"编辑预设", "新增预设", "删除预设", "退出"};
+    static const char *const kRows[4] = {"编辑预设", "新建预设", "删除预设", "退出"};
     uint8_t i;
     TFT_FillScreen(UI_BG);
     draw_page_title_zh("烘干预设", UI_ACCENT);
@@ -1177,17 +1188,17 @@ void UI_DrawPresetMenu(void)
     }
 }
 
-/* 预设二级列表页（normal=编辑/长按切换；del_mode=删除） */
+/* 棰勮句簩绾у垪琛ㄩ〉锛坣ormal=缂栬緫/闀挎寜鍒囨崲锛沝el_mode=鍒犻櫎锛 */
 void UI_DrawPreset(void)
 {
     TFT_FillScreen(UI_BG);
     if (g_sys.preset_del_mode) draw_page_title_zh("删除预设", UI_ACCENT2);
     else draw_page_title_zh("编辑预设", UI_ACCENT);
     preset_redraw_viewport();
-    if (g_sys.preset_confirm == 1) draw_confirm_popup("确认删除该预设");
+    if (g_sys.preset_confirm == 1) draw_confirm_popup("确定删除预设");
 }
 
-/* 预设编辑页（行：名称/温度/时间/退出；temp/time 用弹窗；名称仅新建可编辑） */
+/* 棰勮�剧紪杈憫椤碉紙鑼锛氬悕绉�/娓╁害/鏃堕棿/閫�鍑汉锛泃emp/time 鐢ㄥ脊绐楋紱鍚嶇О浠呮柊寤哄彲缂栬緫锛 */
 void UI_DrawPresetEdit(void)
 {
     char buf[24];
@@ -1196,7 +1207,7 @@ void UI_DrawPresetEdit(void)
     TFT_FillScreen(UI_BG);
     draw_page_title_zh("预设编辑", UI_ACCENT);
     y = 36;
-    /* 行光标：选中的行整行高亮 */
+    /* 琛屽厜鏍囷細閫変腑鐨勮屾暣琛岄珮浜 */
     if (g_sys.preset_row == 0) fill_round_rect(10, y, 220, 18, UI_ACCENT, 4);
     /* NAME */
     TFT_DrawStringZh(10, y, "名称", (g_sys.preset_row == 0) ? UI_TEXT : UI_TEXT_DIM,
@@ -1217,7 +1228,7 @@ void UI_DrawPresetEdit(void)
         TFT_DrawStringZh(90, y + 1, (p->name[0]) ? p->name : "PLA",
                          (g_sys.preset_row == 0) ? UI_TEXT : UI_ACCENT,
                          (g_sys.preset_row == 0) ? UI_ACCENT : UI_BG);
-        /* 名称为唯一身份，非新建时本行光标不可选，不再画"(内置)"多余标记 */
+        /* 鍚嶇О涓哄敮涓韬浠斤紝闈炴柊寤烘椂鏈琛屽厜鏍囦笉鍙閫夛紝涓嶅啀鐢"(内置)"澶氫綑鏍囪 */
     }
     y += 22;
     /* TEMP */
@@ -1241,7 +1252,7 @@ void UI_DrawPresetEdit(void)
                          (g_sys.preset_row == 2) ? UI_ACCENT : UI_BG);
     }
     y += 22;
-    /* 退出：与参数行左对齐（X 一致）；仅在编辑页内作为第4行 */
+    /* 閫�鍑汉锛氫笌鍙傛暟鑼宸﹀�归綈锛圶 涓鑷达級锛涗粎鍦ㄧ紪杈戦〉鍐呬綔涓虹4琛 */
     {
         uint16_t by = y;
         TFT_FillRect(10, by, 220, 18, (g_sys.preset_row == 3) ? UI_ACCENT : UI_BG);
@@ -1251,11 +1262,11 @@ void UI_DrawPresetEdit(void)
             TFT_DrawStringZh(10, by, "退出", UI_TEXT_DIM, UI_BG);
         }
     }
-    if (g_sys.preset_confirm == 2) draw_confirm_popup("确认保存");
+    if (g_sys.preset_confirm == 2) draw_confirm_popup("确定保存");
 }
 
-/* 预设编辑页（行：NAME/TEMP/TIME/APPLY；temp/time 用弹窗；NAME 字符光标编辑） */
-/* 预设 temp/time 弹窗 */
+/* 棰勮�剧紪杈憫椤碉紙鑼锛歂AME/TEMP/TIME/APPLY锛泃emp/time 鐢ㄥ脊绐楋紱NAME 瀛楃﹀厜鏍囩紪杈戯級 */
+/* 棰勮 temp/time 寮圭獥 */
 static void draw_preset_popup(uint8_t kind)
 {
     uint16_t pw = 170, ph = 90;
@@ -1271,26 +1282,28 @@ static void draw_preset_popup(uint8_t kind)
         if (w) TFT_FillRect((uint16_t)(px + 15), (uint16_t)(py + 30), w, 10, UI_ACCENT);
         sprintf(buf, "%d C", p->temp);
         TFT_DrawString((TFT_WIDTH - (uint16_t)(strlen(buf) * 12U)) / 2U, (uint16_t)(py + 56), buf, UI_TEXT, UI_CARD, 2);
-    } else {           /* 时间 6 位：样式对齐烘干时间卡二级菜单（描边光标+居中数字+冒号） */
+    } else {           /* 鏃堕棿 6 浣嶏細鏍峰紡瀵归綈鐑樺共鏃堕棿鍗′簩绾ц彍鍗曪紙鎻忚竟鍏夋爣+灞呬腑鏁板瓧+鍐掑彿锛 */
         uint8_t x;
-        const uint16_t pop_card = TFT_COLOR(0xF7, 0xFA, 0xFF);   /* 微亮衬底，与页面深色底区分 */
-        TFT_DrawString((TFT_WIDTH - 4U * 12U) / 2U, (uint16_t)(py + 9), "TIME", UI_TEXT, pop_card, 2);
-        fill_round_rect((uint16_t)(px + 8), (uint16_t)(py + 29), (uint16_t)(pw - 16), 38, pop_card, 6);
+        const uint16_t pop_card = TIME_CARD_BG;   /* 闅忎富棰槩樺垏鎹锛涗寒=杩戠櫧銆佹殫=娣辩伆钃濓紝涓嶅啀榛戝簳鐧藉瓧 */
+        uint16_t lab_col = (g_sys.theme == 0) ? UI_TEXT : TFT_COLOR(0xEC, 0xEF, 0xF1);
+        TFT_DrawString((TFT_WIDTH - 4U * 12U) / 2U, (uint16_t)(py + 9), "TIME", lab_col, UI_CARD, 2);
+        /* 鏃堕棿琛搴曟寜鏁板瓧澧ㄨ抗 py+42..py+62 鐨 Y 涓蹇(py+52)鍨傜洿灞呬腑锛氭爮楂38 鈫 y=py+33 */
+        fill_round_rect((uint16_t)(px + 8), (uint16_t)(py + 33), (uint16_t)(pw - 16), 38, pop_card, 6);
         for (x = 0; x < 6; x++) {
-            uint16_t dx = (uint16_t)(px + 19 + x * 21 + ((x >= 2) ? 6 : 0) + ((x >= 4) ? 6 : 0));
+            uint16_t dx = (uint16_t)(px + 16 + x * 22 + ((x >= 2) ? 8 : 0) + ((x >= 4) ? 8 : 0));
             uint16_t dy = (uint16_t)(py + 42);
             char ch[2] = {(char)('0' + g_sys.time_digits[x]), 0};
             uint16_t frame_col;
-            /* 选中态只画轮廓光标居中包裹数字；编辑态换橙色轮廓 */
+            /* 鍏夋爣妗嗭細5x7 瀛楁ā scale3 澧ㄨ抗=dy..dy+20(21px)锛岄《妗哾y-2..dy-1/搴曟哾y+21..dy+22 绱ц创澧ㄨ抗 */
             if (g_sys.preset_time_cur != x) frame_col = 0xFFFF;
             else frame_col = g_sys.preset_time_edit ? COLOR_ORANGE : UI_ACCENT2;
             TFT_DrawString(dx, dy, ch, COLOR_CYAN, pop_card, 3);
-            if (frame_col != 0xFFFF) draw_frame((uint16_t)(dx - 2), (uint16_t)(dy - 2), 20, 24, frame_col);
+            if (frame_col != 0xFFFF) draw_frame((uint16_t)(dx - 2), (uint16_t)(dy - 2), 19, 25, frame_col);
         }
-        /* 冒号（时:分:秒 两组）：两段方块，垂直居中对齐数字 */
+        /* 鍐掑彿锛堟椂:鍒:绉 涓ょ粍锛夛細灞呬腑浜庣粍闂撮殭锛屽瀭鐩村瑰噯鏁板瓧涓蹇 */
         {
-            uint16_t cy = (uint16_t)(py + 42);
-            uint16_t cx1 = (uint16_t)(px + 59), cx2 = (uint16_t)(px + 106);
+            uint16_t cy = (uint16_t)(py + 45);
+            uint16_t cx1 = (uint16_t)(px + 58), cx2 = (uint16_t)(px + 110);
             TFT_FillRect(cx1, (uint16_t)(cy + 4), 6, 5, UI_ACCENT2);
             TFT_FillRect(cx1, (uint16_t)(cy + 12), 6, 5, UI_ACCENT2);
             TFT_FillRect(cx2, (uint16_t)(cy + 4), 6, 5, UI_ACCENT2);
@@ -1299,31 +1312,30 @@ static void draw_preset_popup(uint8_t kind)
     }
 }
 
-/* PID 校准页右上角实时温度：AIR/PTC（与桌面卡片同源：current_temp/ptc_temp），
- * 0.1℃ 变化才局部重绘，避免整屏闪烁。 */
+/* PID 鏍″噯椤靛疄鏃舵俯搴︼細AIR/PTC 鎺掑湪 y=108 琛岋紙涓ら〉甯冨眬宸茬粺涓锛涙棫鐗堟斁鍦 y=138 瓒呭嚭
+ * 135px 鍙瑙佸尯鎵浠ョ湅涓嶈侊級锛0.1鈩 鍙樺寲鎵嶅眬閮ㄩ噸缁樸 */
 static void draw_tune_live(void)
 {
     char buf[24];
-    TFT_FillRect(138, 30, 102, 34, UI_BG);
-    sprintf(buf, "AIR %.1f", g_sys.current_temp);
-    TFT_DrawString(140, 32, buf, COLOR_CYAN, UI_BG, 1);
-    sprintf(buf, "PTC %.1f", g_sys.ptc_temp);
-    TFT_DrawString(140, 44, buf, COLOR_GREEN, UI_BG, 1);
+    TFT_FillRect(5, 106, 235, 13, UI_BG);
+    sprintf(buf, "AIR %.1f C", g_sys.current_temp);
+    TFT_DrawString(16, 108, buf, COLOR_CYAN, UI_BG, 1);
+    sprintf(buf, "PTC %.1f C", g_sys.ptc_temp);
+    TFT_DrawString(136, 108, buf, COLOR_GREEN, UI_BG, 1);
 }
 
-/* PID 校准页进度条局部刷新（which 0=空气tempPID 1=PTC元件PID），避免整屏闪烁 */
+/* PID 鏍″噯椤佃繘搴︽潯灞閮ㄥ埛鏂帮紙涓ら〉鍚屽竷灞锛氭潯 y=68銆佺櫨鍒嗘瘮 y=86锛夛紝閬垮厤鏁村睆闂鐑 */
 static void refresh_autotune_bar(uint8_t which, uint8_t pct)
 {
-    uint16_t bx = 42, by = (which == 0) ? 97 : 82;
     char buf[8];
-    TFT_FillRect(bx, by, 156, 10, UI_BG);
-    if (pct) TFT_FillRect(bx, by, (uint16_t)(156U * pct / 100U), 10, COLOR_GREEN);
+    (void)which;
+    TFT_FillRect(42, 68, 156, 10, UI_BG);
+    if (pct) TFT_FillRect(42, 68, (uint16_t)(156U * pct / 100U), 10, COLOR_GREEN);
     sprintf(buf, "%d%%", pct);
-    TFT_DrawString((TFT_WIDTH - (uint16_t)(strlen(buf) * 12U)) / 2U,
-                   (which == 0) ? 115 : 100, buf, UI_TEXT, UI_BG, 2);
+    TFT_DrawString((TFT_WIDTH - (uint16_t)(strlen(buf) * 12U)) / 2U, 86, buf, UI_TEXT, UI_BG, 2);
 }
 
-/* PID 调整页单行刷新：编辑中实时更新对应行 */
+/* PID 璋冩暣椤靛崟琛屽埛鏂帮細缂栬緫涓瀹炴椂鏇存柊瀵瑰簲琛 */
 static void refresh_pid_row(uint8_t row)
 {
     char buf[24];
@@ -1342,14 +1354,14 @@ static void refresh_pid_row(uint8_t row)
     }
 }
 
-static const char *const kMenuItems[] = {"WiFi", "电机", "关于", "设置", "重启", "恢复出厂设置", "退出"};
-#define MENU_ITEM_COUNT   7u
+static const char *const kMenuItems[] = {"WiFi", "电机", "关于", "CAN", "设置", "音乐", "重启", "恢复出厂设置", "退出"};
+#define MENU_ITEM_COUNT   9u
 #define MENU_ROW_H        18u
 #define MENU_ROW_GAP      20u
 #define MENU_TOP_Y        32u
 
-/* 绘制单个菜单行：选中=蓝底白字+圆角轮廓，未选中=灰字。
- * 位置由 pixel_offset 决定，供可视区绘制调用。 */
+/* 缁樺埗鍗曚釜鑿滃崟琛岋細閫変腑=钃濆簳鐧藉瓧+鍦嗚掕疆寤擄紝鏈閫変腑=鐏板瓧銆
+ * 浣嶇疆鐢 pixel_offset 鍐冲畾锛屼緵鍙瑙嗗尯缁樺埗璋冪敤銆 */
 static void draw_menu_row(uint8_t i, uint8_t selected)
 {
     int16_t y = (int16_t)(MENU_VIEW_Y - g_sys.pixel_offset + i * MENU_ROW_H2);
@@ -1363,7 +1375,7 @@ static void draw_menu_row(uint8_t i, uint8_t selected)
     }
 }
 
-/* 菜单可视区整区重绘（滚动用，不整屏刷新） */
+/* 鑿滃崟鍙瑙嗗尯鏁村尯閲嶇粯锛堟粴鍔ㄧ敤锛屼笉鏁村睆鍒锋柊锛 */
 static void menu_redraw_viewport(void)
 {
     uint8_t i;
@@ -1372,7 +1384,7 @@ static void menu_redraw_viewport(void)
     draw_scrollbar(MENU_ITEM_COUNT, 5, (uint8_t)(g_sys.pixel_offset / MENU_ROW_H2), MENU_VIEW_Y, MENU_VIEW_H);
 }
 
-/* 菜单编码器滚动：更新选中索引(循环)与 pixel_offset，重绘可视区 */
+/* 鑿滃崟缂栫爜鍣ㄦ粴鍔锛氭洿鏂伴変腑绱㈠紩(寰鐜)涓 pixel_offset锛岄噸缁樺彲瑙嗗尯 */
 void UI_MenuScroll(int dir)
 {
     int16_t target, max_off;
@@ -1397,7 +1409,7 @@ void UI_DrawMenu(void)
     draw_scrollbar(MENU_ITEM_COUNT, 5, (uint8_t)(g_sys.pixel_offset / MENU_ROW_H2), MENU_VIEW_Y, MENU_VIEW_H);
 }
 
-/* 开关滑块按钮：46x16 圆角药丸，与行高16对齐。开=整体填充色+白色圆钮靠右；关=灰底+白色圆钮靠左 */
+/* 寮鍏虫粦鍧楁寜閽锛46x16 鍦嗚掕嵂涓革紝涓庤岄珮16瀵归綈銆傚紑=鏁翠綋濉鍏呰壊+鐧借壊鍦嗛挳闈犲彸锛涘叧=鐏板簳+鐧借壊鍦嗛挳闈犲乏 */
 static void draw_toggle(uint16_t x, uint16_t y, uint8_t on)
 {
     uint16_t w = 42, h = 16, k = 12;
@@ -1406,8 +1418,8 @@ static void draw_toggle(uint16_t x, uint16_t y, uint8_t on)
     else    fill_round_rect((uint16_t)(x + 2), (uint16_t)(y + 2), k, (uint16_t)(h - 4), COLOR_WHITE, 6);
 }
 
-/* 开关滑动动画版：anim=0 静止；1~6 帧从关→开滑行；7~12 帧从开→关滑行。
- * 滑块位置按帧线性插值，视觉为滑块平滑滑动（约 6×30ms≈180ms 完成）。 */
+/* 寮鍏虫粦鍔ㄥ姩鐢荤増锛歛nim=0 闈欐锛1~6 甯т粠鍏斥啋寮婊戣岋紱7~12 甯т粠寮鈫掑叧婊戣屻
+ * 婊戝潡浣嶇疆鎸夊抚绾挎ф彃鍊硷紝瑙嗚変负婊戝潡骞虫粦婊戝姩锛堢害 6脳30ms鈮180ms 瀹屾垚锛夈 */
 static void draw_toggle_animated(uint16_t x, uint16_t y, uint8_t on, uint8_t anim)
 {
     uint16_t w = 42, h = 16, k = 12;
@@ -1417,7 +1429,7 @@ static void draw_toggle_animated(uint16_t x, uint16_t y, uint8_t on, uint8_t ani
         knob_x = on ? (uint16_t)(x + w - k - 2) : (uint16_t)(x + 2);
     } else {
         uint8_t fr = anim;   /* 1..12 */
-        uint8_t off_dir = (fr > 6) ? 1 : 0;          /* 1-6: 关→开；7-12: 开→关 */
+        uint8_t off_dir = (fr > 6) ? 1 : 0;          /* 1-6: 鍏斥啋寮锛7-12: 寮鈫掑叧 */
         uint8_t f = (uint8_t)(off_dir ? (fr - 6) : fr);
         uint16_t x0 = off_dir ? (uint16_t)(x + w - k - 2) : (uint16_t)(x + 2);
         uint16_t x1 = off_dir ? (uint16_t)(x + 2) : (uint16_t)(x + w - k - 2);
@@ -1428,7 +1440,7 @@ static void draw_toggle_animated(uint16_t x, uint16_t y, uint8_t on, uint8_t ani
     fill_round_rect(knob_x, (uint16_t)(y + 2), k, (uint16_t)(h - 4), COLOR_WHITE, 6);
 }
 
-/* 电机页行文本（全宽重建 → 速度rpm长度自适应，编辑时无残留；开/关项含状态供变更检测） */
+/* 鐢垫満椤佃屾枃鏈锛堝叏瀹介噸寤 鈫 閫熷害rpm闀垮害鑷閫傚簲锛岀紪杈戞椂鏃犳畫鐣欙紱寮/鍏抽」鍚︾姸鎭渚涘彉鏇存ｆ祴锛� */
 static void motor_row_str(uint8_t i, char *buf)
 {
     uint8_t is_tmc = (g_sys.params.motor_driver == MOTOR_DRIVER_TMC2208 ||
@@ -1458,7 +1470,7 @@ static void motor_row_str(uint8_t i, char *buf)
     }
 }
 
-/* 电机行是否为开关项（联动/摆动/静音） */
+/* 鐢垫満琛屾槸鍚︿负寮鍏抽」锛堣仈鍔/鎽嗗姩/闈欓煶锛 */
 static uint8_t motor_slot_toggle(uint8_t slot)
 {
     return (slot == 0 || slot == 3 || slot == 9);
@@ -1474,7 +1486,35 @@ static uint8_t motor_slot_toggle_val(uint8_t slot)
     }
 }
 
-/* 电机行绘制：开/关项画滑块，其余画文本 */
+/* TMC 閫氳璇婃柇缂撳瓨锛氳繘鍏ョ數鏈洪〉/姣忕掕皟鐢 Stepper_TmcProbe 鏇存柊锛岄伩鍏嶆瘡琛岀粯鍒堕兘闃诲炶 UART銆
+ * ok=1 閫氳鎴愬姛锛宑hip=IC 鐗堟湰(0x2208/0x2209/0x? )锛沷k=0 鏃朵繚鐣欎笂娆¤绘暟渚涙帓鏌ャ */
+static uint8_t  g_tmc_ok  = 0;
+static uint32_t g_tmc_ver = 0;
+
+static void tmc_probe_update(void)
+{
+    uint32_t ver = 0;
+    uint8_t ok = Stepper_TmcProbe(&ver);
+    if (ok) { g_tmc_ok = 1; g_tmc_ver = ver; }
+    else    { g_tmc_ok = 0; }
+}
+
+/* 缁樺埗/鍒锋柊搴曢儴璇婃柇琛岋紙scale1锛孉SCII锛夈侷FCNT 姣忕掗掑 鈬 鑺鐗囩‘瀹炲湪搴旂瓟銆 */
+static void tmc_draw_diag(void)
+{
+    char buf[28];
+    uint16_t fg = g_tmc_ok ? COLOR_GREEN : COLOR_RED;
+    uint16_t box_y = 208;
+    fill_round_rect(5, box_y, 230, 22, UI_CARD, 6);
+    if (g_tmc_ok) {
+        sprintf(buf, "TMC-COM OK  CNT=%lu", (unsigned long)g_tmc_ver);
+    } else {
+        sprintf(buf, "TMC-COM FAIL");
+    }
+    TFT_DrawString(8, box_y + 7, buf, fg, UI_CARD, 1);
+}
+
+/* 鐢垫満椤靛崟琛岀粯鍒讹細寮/鍏抽」鐢绘粦鍧楋紝鍏朵綑鐢绘枃鏈 */
 static void motor_draw_row(uint8_t i, uint16_t y, uint8_t selected)
 {
     char buf[32];
@@ -1487,7 +1527,7 @@ static void motor_draw_row(uint8_t i, uint16_t y, uint8_t selected)
     if (selected) TFT_FillRect(5, y, 220, 16, UI_ACCENT);
     else TFT_FillRect(5, y, 220, 16, UI_BG);
     if (i >= count - 1) {
-        /* 退出行：按文本绘制 */
+        /* 閫�鍑汉鑼锛氭寜鏂囨滅粯鍒� */
         TFT_DrawStringZh(5, y, buf, selected ? UI_TEXT : UI_TEXT_DIM, selected ? UI_ACCENT : UI_BG);
     } else if (motor_slot_toggle(slot)) {
         TFT_DrawStringZh(5, y, (slot == 9) ? "静音" : (slot == 3) ? "摆动" : "联动",
@@ -1502,14 +1542,14 @@ static void motor_draw_row(uint8_t i, uint16_t y, uint8_t selected)
     }
 }
 
-/* 电机页单行局部刷新：清全行再绘（开关滑块/数值都实时更新） */
+/* 鐢垫満椤靛崟琛屽眬閮ㄥ埛鏂帮細娓呭叏琛屽啀缁橈紙寮鍏虫粦鍧/鏁板奸兘瀹炴椂鏇存柊锛 */
 static void refresh_motor_row(uint8_t i)
 {
     uint16_t y = (uint16_t)(SCR_VIEW_Y - g_sys.pixel_offset + i * SCR_ROW_H);
     motor_draw_row(i, y, (g_sys.selected_item == i));
 }
 
-/* 电机页可视区整区重绘（滚动用，不整屏刷新） */
+/* 鐢垫満椤靛彲瑙嗗尯鏁村尯閲嶇粯锛堟粴鍔ㄧ敤锛屼笉鏁村睆鍒锋柊锛 */
 static void motor_redraw_viewport(void)
 {
     uint8_t is_tmc = (g_sys.params.motor_driver == MOTOR_DRIVER_TMC2208 ||
@@ -1524,7 +1564,7 @@ static void motor_redraw_viewport(void)
     draw_scrollbar(count, 5, (uint8_t)(g_sys.pixel_offset / SCR_ROW_H), SCR_VIEW_Y, SCR_VIEW_H);
 }
 
-/* 电机页编码器滚动：更新选中索引(循环)与 pixel_offset，重绘可视区 */
+/* 鐢垫満椤电紪鐮佸櫒婊氬姩锛氭洿鏂伴変腑绱㈠紩(寰鐜)涓 pixel_offset锛岄噸缁樺彲瑙嗗尯 */
 void UI_MotorScroll(int dir)
 {
     uint8_t is_tmc = (g_sys.params.motor_driver == MOTOR_DRIVER_TMC2208 ||
@@ -1551,7 +1591,7 @@ void UI_DrawMotorAdjust(void)
     TFT_FillScreen(UI_BG);
     draw_page_title_zh("电机设置", UI_ACCENT);
 
-    /* 可视区：按 pixel_offset 绘制全部项并裁剪到视区 */
+    /* 鍙瑙嗗尯锛氭寜 pixel_offset 缁樺埗鍏ㄩ儴椤瑰苟瑁佸壀鍒拌嗗尯 */
     for (uint8_t i = 0; i < count; i++) {
         int16_t y = (int16_t)(SCR_VIEW_Y - g_sys.pixel_offset + i * SCR_ROW_H);
         if (y < (int16_t)SCR_VIEW_Y || y + SCR_ROW_H > (int16_t)(SCR_VIEW_Y + SCR_VIEW_H)) continue;
@@ -1559,14 +1599,11 @@ void UI_DrawMotorAdjust(void)
     }
     draw_scrollbar(count, 5, (uint8_t)(g_sys.pixel_offset / SCR_ROW_H), SCR_VIEW_Y, SCR_VIEW_H);
 
-    /* TMC 驱动：底部通讯状态诊断行（scale2+背景框，暗色下清晰可见） */
+    /* TMC 椹卞姩锛氬簳閮ㄩ氳鐘舵佽瘖鏂琛岋紙scale2+鑳屾櫙妗嗭紝鏆楄壊涓嬫竻鏅板彲瑙侊級 */
     {
         uint16_t box_y = 208;
         if (is_tmc) {
-            uint8_t ok = Stepper_TmcComOk();
-            uint16_t fg = ok ? COLOR_GREEN : COLOR_RED;
-            fill_round_rect(5, box_y, 230, 22, UI_CARD, 6);
-            TFT_DrawString(12, box_y + 3, ok ? "TMC-COM:OK" : "TMC-COM:FAIL", fg, UI_CARD, 2);
+            tmc_draw_diag();
         } else {
             TFT_FillRect(5, box_y, 230, 22, UI_BG);
         }
@@ -1592,39 +1629,50 @@ void UI_DrawAbout(void)
     if (g_sys.selected_item == 0) draw_frame(5, 184, 125, BTN_H, UI_ACCENT);
 }
 
+/* WiFi 椤碉細琛0=WiFi寮鍏 1=AP璁剧疆(寮閰嶇綉鐑鐐) 2=閲嶆柊璁剧疆(娓5缁+閰嶇綉) 3=閫�鍑汉�
+ * 鈥滈厤/鐑鈥濈瓑瀛楁ā鏈鍏ュ簱锛屾晠鐢ㄥ瓧搴撶幇鏈夊瓧+ASCII 缁勬爣绛撅紱琛ュ瓧妯″悗鍙鏀瑰洖鈥滈厤缃/閲嶆柊閰嶇綉鈥濄 */
+#define WIFI_ROWS 4
+static void wifi_draw_row(uint8_t i, uint16_t y, uint8_t selected);
+
 void UI_DrawWiFiScreen(void)
 {
+    uint8_t i;
     TFT_FillScreen(UI_BG);
     draw_page_title_zh("WiFi设置", UI_ACCENT);
-    if (g_sys.selected_item == 1) {
-        TFT_FillRect(10, 60, 100, 16, UI_ACCENT);
-        TFT_DrawStringZh(10, 60, "WiFi", UI_TEXT, UI_ACCENT);
-    } else {
-        TFT_DrawStringZh(10, 60, "WiFi", g_sys.wifi_enabled ? COLOR_GREEN : UI_TEXT_DIM, UI_BG);
-    }
-    draw_toggle(122, 60, g_sys.wifi_enabled);
-    if (g_sys.wifi_enabled) {
-        if (g_sys.wifi_ap_mode) {
-            TFT_DrawStringZh(10, 78, "模式:AP", COLOR_CYAN, UI_BG);
-            TFT_DrawString(10, 96, WIFI_AP_SSID, UI_TEXT, UI_BG, 2);
-        } else {
-            TFT_DrawStringZh(10, 78, "模式:STA", COLOR_CYAN, UI_BG);
-            TFT_DrawString(10, 96, g_sys.wifi_ip, UI_TEXT, UI_BG, 2);
+    for (i = 0; i < WIFI_ROWS; i++)
+        wifi_draw_row(i, (uint16_t)(30 + i * 26), (uint8_t)(g_sys.selected_item == i ? 1 : 0));
+}
+
+static void wifi_draw_row(uint8_t i, uint16_t y, uint8_t selected)
+{
+    static const char *labels[WIFI_ROWS] = {"WiFi", "AP设置", "重新设置", "退出"};
+    const char *ip = EspLink_IP();
+    uint16_t bg = selected ? UI_ACCENT : UI_BG;
+    uint16_t lw = zh_str_width(labels[i]);
+    TFT_FillRect(5, y, 230, 18, bg);
+    TFT_DrawStringZh(8, y + 1, labels[i],
+                     (i == 0 && g_sys.wifi_enabled && !selected) ? COLOR_GREEN : UI_FG, bg);
+    if (i == 0) {
+        draw_toggle(190, y + 2, g_sys.wifi_enabled);
+        if (g_sys.wifi_enabled) {
+            TFT_FillRect((uint16_t)(8 + lw + 6), y + 1, (uint16_t)(190 - 8 - lw - 8), 16, bg);
+            switch (EspLink_State()) {
+            case ESPLINK_BOOT:
+            case ESPLINK_CONNECTING:
+                TFT_DrawString((uint16_t)(8 + lw + 6), y + 5, "...", UI_FG_DIM, bg, 1); break;
+            case ESPLINK_ONLINE:
+                TFT_DrawString((uint16_t)(8 + lw + 6), y + 5, ip, (uint16_t)(selected ? UI_FG : COLOR_GREEN), bg, 1); break;
+            case ESPLINK_CONFIG:
+                TFT_DrawString((uint16_t)(8 + lw + 6), y + 5, "AP!", (uint16_t)(selected ? UI_FG : COLOR_CYAN), bg, 1); break;
+            default: break;
+            }
         }
-    } else {
-        TFT_DrawStringZh(10, 78, "点击开启", COLOR_YELLOW, UI_BG);
-    }
-    if (g_sys.selected_item == 0) {
-        TFT_FillRect(10, 120, 44, 16, UI_ACCENT);
-        TFT_DrawStringZh(10, 120, "退出", UI_TEXT, UI_ACCENT);
-    } else {
-        TFT_DrawStringZh(10, 120, "退出", UI_TEXT_DIM, UI_BG);
     }
 }
 
 static uint8_t ota_screen_drawn = 0;
 
-/* 重新进入 OTA 界面时调用，下次 UI_DrawOTAScreen 会整屏重画 */
+/* 閲嶆柊杩涘叆 OTA 鐣岄潰鏃惰皟鐢锛屼笅娆 UI_DrawOTAScreen 浼氭暣灞忛噸鐢 */
 void UI_ResetOTAScreen(void)
 {
     ota_screen_drawn = 0;
@@ -1683,17 +1731,17 @@ void UI_DrawSafetyAlert(void)
         TFT_DrawStringZh(tx, 100, "烘干停止", COLOR_WHITE, COLOR_RED);
     }
 
-    draw_btn(160, "  确认", COLOR_GREEN, 1);
+    draw_btn(160, "  确定", COLOR_GREEN, 1);
     draw_frame(5, 160, 125, BTN_H, UI_ACCENT);
 }
 
-/* 前置声明：设置页数值文本生成，供整屏绘制与单行实时刷新共用 */
+/* 鍓嶇疆澹版槑锛氳剧疆椤垫暟鍊兼枃鏈鐢熸垚锛屼緵鏁村睆缁樺埗涓庡崟琛屽疄鏃跺埛鏂板叡鐢 */
 static void settings_row_str(uint8_t i, char *buf);
 
-/* 设置页单行绘制（标签+高亮+值/开关滑块） */
+/* 璁剧疆椤靛崟琛岀粯鍒讹紙鏍囩+楂樹寒+鍊/寮鍏虫粦鍧楋級 */
 static void settings_draw_row(uint8_t i, uint16_t y)
 {
-    static const char *kLabels[] = {"蜂鸣器联动","蜂鸣器音量","灯光开关","背光","主题","熄屏","RGB亮度","退出"};
+    static const char *kLabels[] = {"蜂鸣器联动","蜂鸣器音量","灯光开关","背光","主题","熄屏","RGB灯带","退出"};
     char buf[32];
     TFT_DrawStringZh(10, y, kLabels[i], UI_TEXT_DIM, UI_BG);
     if (i == g_sys.selected_item) {
@@ -1714,13 +1762,17 @@ static void settings_draw_row(uint8_t i, uint16_t y)
     }
 }
 
-/* RGB 亮度弹窗：指示灯/灯条 双进度条 + 完成；sel=0指示灯 1灯条 2完成
- * 光标=绿框选中行；选中后单击进入数值编辑，该行值区域橙底高亮、轮廓变橙。 */
+/* RGB 浜搴﹀脊绐楋細鎸囩ず鐏�/鐏�鍏� 鍙岃繘搴︽潯 + 瀹屾垚锛泂el=0鎸囩ず鐏� 1鐏�鍏� 2瀹屾垚
+ * 鍏夋爣=閫変腑琛屽渾瑙掕疆寤擄紙鏁磋岋紝鍚︽爣�/杩涘害鏉/鏁板硷級锛涘崟鍑昏繘鍏ユ暟鍊肩紪杈戯紝
+ * 璇ヨ岃疆寤撳彉姗欍佹暟鍊煎尯姗欒壊楂樹寒锛堥珮浜涓庤疆寤撲繚鎸 6px 闂磋窛锛屼簰涓嶅共娑夛級銆 */
 #define RGB_POP_W    190
 #define RGB_POP_H    126
-#define RGB_BAR_X    16     /* 弹窗内进度条X(px+16) */
-#define RGB_BAR_W    100
-#define RGB_VAL_X    123    /* 数值X(px+82) */
+#define RGB_ROW_X    8      /* 琛屾嗗乏娌(px+8) */
+#define RGB_ROW_W    170    /* 琛屾嗗 */
+#define RGB_BAR_X    16     /* 杩涘害鏉X(px+16) */
+#define RGB_BAR_W    96     /* 杩涘害鏉″斤細鍙虫部 px+112 */
+#define RGB_VAL_X    122    /* 鏁板奸珮浜鍖哄乏娌(px+122) */
+#define RGB_VAL_W    52     /* 鏁板奸珮浜鍖哄斤細鍙虫部 px+174 < 琛屾嗗彸娌 px+178 */
 #define RGB_ROW_H    34
 
 static void draw_rgb_bar(uint8_t item);   /* 前置声明 */
@@ -1742,12 +1794,13 @@ static void draw_rgb_bright_popup(void)
         uint8_t selected = (sel == item);
         uint8_t editing  = (selected && g_sys.rgb_bright_edit);
         uint16_t cc = editing ? COLOR_ORANGE : COLOR_GREEN;
-        TFT_FillRect((uint16_t)(px + 8), ry, (uint16_t)(pw - 16), RGB_ROW_H, UI_CARD);
-        if (selected) draw_round_outline((uint16_t)(px + 8), ry, (uint16_t)(pw - 16), RGB_ROW_H, cc, 6, 2);
+        TFT_FillRect((uint16_t)(px + RGB_ROW_X), ry, RGB_ROW_W, RGB_ROW_H, UI_CARD);
         TFT_DrawStringZh((uint16_t)(px + 16), (uint16_t)(py + (item == 0 ? 12 : 52)),
-                         (item == 0) ? "指示灯" : "灯条",
+                         (item == 0) ? "指示灯" : "灯光",
                          selected ? cc : UI_TEXT, UI_CARD);
         draw_rgb_bar(item);
+        /* 杞寤撴渶鍚庣敾锛氱洊鍦ㄥ唴瀹逛箣涓婏紝涓嶄細鍐嶈鏁板/杩涘害鏉″悆鎺変竴鎴 */
+        if (selected) draw_round_outline((uint16_t)(px + RGB_ROW_X), ry, RGB_ROW_W, RGB_ROW_H, cc, 6, 2);
     }
     /* 完成 */
     if (sel == 2) {
@@ -1758,29 +1811,28 @@ static void draw_rgb_bright_popup(void)
     }
 }
 
-/* 仅重绘某一行(0=指示灯 1=灯条)的进度条（值变化灰度，不影响光标框/标签） */
+/* 浠呴噸缁樻煇涓琛(0=鎸囩ず鐏� 1=鐏�鍏�)鐨勮繘搴︽潯锛堝煎彉鍖栫伆搴︼紝涓嶅奖鍝嶅厜鏍囨/鏍囩撅級 */
 static void draw_rgb_bar(uint8_t item)
 {
     uint16_t px = rgb_pop_px();
     uint16_t py = rgb_pop_py();
     uint16_t by = (item == 0) ? (uint16_t)(py + 30) : (uint16_t)(py + 70);
-    uint16_t bw = RGB_BAR_W;
     uint8_t val = (item == 0) ? g_sys.params.rgb_led_bright : g_sys.params.rgb_strip_bright;
     uint8_t selected = (g_sys.rgb_bright_sel == item);
     uint8_t editing  = (selected && g_sys.rgb_bright_edit);
     uint16_t cc = editing ? COLOR_ORANGE : COLOR_GREEN;
     char buf[8];
-    TFT_FillRect((uint16_t)(px + RGB_BAR_X), by, bw, 8, UI_CARD_EDGE);
+    TFT_FillRect((uint16_t)(px + RGB_BAR_X), by, RGB_BAR_W, 8, UI_CARD_EDGE);
     {
-        uint16_t w = (uint16_t)((uint32_t)bw * val / 100U);
+        uint16_t w = (uint16_t)((uint32_t)RGB_BAR_W * val / 100U);
         if (w) TFT_FillRect((uint16_t)(px + RGB_BAR_X), by, w, 8, selected ? cc : UI_ACCENT);
     }
     sprintf(buf, "%d%%", val);
     if (editing) {
-        fill_round_rect((uint16_t)(px + 120), (uint16_t)(by - 3), 52, 16, COLOR_ORANGE, 4);
-        TFT_DrawString((uint16_t)(px + 124), (uint16_t)(by - 3), buf, UI_TEXT, COLOR_ORANGE, 2);
+        fill_round_rect((uint16_t)(px + RGB_VAL_X), (uint16_t)(by - 2), RGB_VAL_W, 13, COLOR_ORANGE, 4);
+        TFT_DrawString((uint16_t)(px + RGB_VAL_X + 4), (uint16_t)(by - 1), buf, UI_TEXT, COLOR_ORANGE, 1);
     } else {
-        TFT_DrawString((uint16_t)(px + 124), (uint16_t)(by - 3), buf, selected ? cc : UI_TEXT, UI_CARD, 2);
+        TFT_DrawString((uint16_t)(px + RGB_VAL_X + 4), (uint16_t)(by - 1), buf, selected ? cc : UI_TEXT, UI_CARD, 1);
     }
 }
 
@@ -1798,7 +1850,7 @@ void UI_DrawSettingsScreen(void)
     draw_scrollbar(cnt, 5, (uint8_t)(g_sys.pixel_offset / SCR_ROW_H), SCR_VIEW_Y, SCR_VIEW_H);
 }
 
-/* 设置页可视区整区重绘（滚动用） */
+/* 璁剧疆椤靛彲瑙嗗尯鏁村尯閲嶇粯锛堟粴鍔ㄧ敤锛 */
 static void settings_redraw_viewport(void)
 {
     uint8_t cnt = 8;
@@ -1811,7 +1863,7 @@ static void settings_redraw_viewport(void)
     draw_scrollbar(cnt, 5, (uint8_t)(g_sys.pixel_offset / SCR_ROW_H), SCR_VIEW_Y, SCR_VIEW_H);
 }
 
-/* 设置页编码器滚动：更新选中索引(循环)与 pixel_offset，重绘可视区 */
+/* 璁剧疆椤电紪鐮佸櫒婊氬姩锛氭洿鏂伴変腑绱㈠紩(寰鐜)涓 pixel_offset锛岄噸缁樺彲瑙嗗尯 */
 void UI_SettingsScroll(int dir)
 {
     uint8_t cnt = 8;
@@ -1827,7 +1879,7 @@ void UI_SettingsScroll(int dir)
     settings_redraw_viewport();
 }
 
-/* 蜂鸣器音量/屏幕亮度 编辑弹窗：进度条在上、当前值在下（覆盖于当前菜单之上，非整屏） */
+/* 铚傞福鍣ㄩ煶閲�/灞忓箷浜搴 缂栬緫寮圭獥锛氳繘搴︽潯鍦ㄤ笂銆佸綋鍓嶅煎湪涓嬶紙瑕嗙洊浜庡綋鍓嶈彍鍗曚箣涓婏紝闈炴暣灞忥級 */
 static void draw_settings_popup(uint8_t item)
 {
     uint16_t pw = 170, ph = 90;
@@ -1848,7 +1900,7 @@ static void draw_settings_popup(uint8_t item)
     TFT_DrawString((TFT_WIDTH - (uint16_t)(strlen(buf) * 12U)) / 2U, (uint16_t)(py + 56), buf, UI_TEXT, UI_CARD, 2);
 }
 
-/* 设置页数值文本（全宽重建，实时刷新无残影） */
+/* 璁剧疆椤垫暟鍊兼枃鏈锛堝叏瀹介噸寤猴紝瀹炴椂鍒锋柊鏃犳畫褰憋級 */
 static void settings_row_str(uint8_t i, char *buf)
 {
     static const char *off_labels[] = {"从不","1s","5s","10s","20s","30s","60s","120s","300s"};
@@ -1863,7 +1915,7 @@ static void settings_row_str(uint8_t i, char *buf)
     }
 }
 
-/* 设置页单行值区刷新：编辑中实时更新（开关滑块/数值/弹窗并存） */
+/* 璁剧疆椤靛崟琛屽煎尯鍒锋柊锛氱紪杈戜腑瀹炴椂鏇存柊锛堝紑鍏虫粦鍧/鏁板/寮圭獥骞跺瓨锛 */
 static void refresh_settings_row(uint8_t i)
 {
     char buf[32];
@@ -1882,8 +1934,8 @@ static void refresh_settings_row(uint8_t i)
     TFT_DrawStringZh(132, y, buf, vcol, UI_BG);
 }
 
-/* 设置页编辑中数值变化时只局部刷新该项的数值文本+进度条，避免全屏重绘
- * (全屏重绘阻塞主循环→编码器轮询被节流→加速失效，且造成闪屏)。 */
+/* 璁剧疆椤电紪杈戜腑鏁板煎彉鍖栨椂鍙灞閮ㄥ埛鏂拌ラ」鐨勬暟鍊兼枃鏈+杩涘害鏉★紝閬垮厤鍏ㄥ睆閲嶇粯
+ * (鍏ㄥ睆閲嶇粯闃诲炰富寰鐜鈫掔紪鐮佸櫒杞璇㈣鑺傛祦鈫掑姞閫熷け鏁堬紝涓旈犳垚闂灞)銆 */
 void UI_RefreshSettingsValue(void)
 {
     uint8_t i = g_sys.selected_item;
@@ -1893,22 +1945,307 @@ void UI_RefreshSettingsValue(void)
     uint8_t m, v, w;
     if (i == 1) { m = 10;  v = g_sys.buzzer_vol; sprintf(buf, "%d/10", v); }
     else        { m = 100; v = g_sys.backlight;   sprintf(buf, "%d%%", v); }
-    TFT_FillRect(120, y, 40, 16, UI_BG);                 /* 清旧值 */
-    TFT_DrawString(120, y, buf, UI_ACCENT, UI_BG, 2);    /* 画新值 */
+    TFT_FillRect(120, y, 40, 16, UI_BG);                 /* 娓呮棫鍊 */
+    TFT_DrawString(120, y, buf, UI_ACCENT, UI_BG, 2);    /* 鐢绘柊鍊 */
     w = (uint8_t)((uint16_t)v * 50U / m);
     TFT_FillRect(165, y + 2, 50, 6, UI_CARD_EDGE);       /* 进度条底 */
-    if (w) TFT_FillRect(165, y + 2, w, 6, UI_ACCENT);   /* 进度条填充 */
+    if (w) TFT_FillRect(165, y + 2, w, 6, UI_ACCENT);   /* 杩涘害鏉″～鍏 */
+}
+
+/* 鈹鈹 CAN 闆嗙兢椤 鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹鈹 */
+#define CAN_ROW_COUNT  5
+
+/* CAN 椤垫暟鍊兼枃鏈 */
+static void can_row_str(uint8_t i, char *buf)
+{
+    switch (i) {
+    case 0: sprintf(buf, "%s", g_sys.params.can_enabled ? "开" : "关"); break;
+    case 1: sprintf(buf, "%s", g_sys.params.can_role ? "从机" : "主机"); break;
+    case 2: sprintf(buf, "%s", g_sys.params.can_role ? "仅主机" :
+                    (g_sys.can_search_tick ? "搜索中" : "搜索设备")); break;
+    case 3:
+        if (g_sys.params.can_role) sprintf(buf, "%s", g_sys.can_joined ? "已入网" : "未接入");
+        else sprintf(buf, "%d", (uint16_t)g_sys.can_connected);
+        break;
+    default: buf[0] = 0; break;
+    }
+}
+
+/* CAN 椤靛崟琛岀粯鍒讹紙鏍囩+楂樹寒+鍊/寮鍏虫粦鍧楋級 */
+static void can_draw_row(uint8_t i, uint16_t y)
+{
+    static const char *kLabels[] = {"CAN通讯", "主从关系", "搜索设备", "已连接设备", "退出"};
+    char buf[32];
+    TFT_DrawStringZh(10, y, kLabels[i], UI_TEXT_DIM, UI_BG);
+    if (i == g_sys.selected_item) {
+        TFT_FillRect(10, y, 95, 16, UI_ACCENT);
+        TFT_DrawStringZh(10, y, kLabels[i], UI_TEXT, UI_ACCENT);
+    }
+    if (i < 4) {
+        uint16_t vcol = (g_sys.can_edit_active && i == g_sys.selected_item) ? COLOR_ORANGE : UI_ACCENT;
+        if (i == 0) {
+            TFT_FillRect(132, y, 95, 16, UI_BG);
+            draw_toggle(134, y, g_sys.params.can_enabled);
+        } else {
+            can_row_str(i, buf);
+            TFT_FillRect(132, y, 95, 16, UI_BG);
+            TFT_DrawStringZh(132, y, buf, vcol, UI_BG);
+        }
+    }
+}
+
+/* CAN 椤靛崟琛屽眬閮ㄥ埛鏂 */
+static void refresh_can_row(uint8_t i)
+{
+    uint16_t y;
+    if (i >= CAN_ROW_COUNT) return;
+    y = (uint16_t)(SCR_VIEW_Y - g_sys.pixel_offset + i * SCR_ROW_H);
+    can_draw_row(i, y);
+}
+
+/* CAN 椤靛彲瑙嗗尯鏁村尯閲嶇粯锛堟粴鍔ㄧ敤锛屼笉鏁村睆鍒锋柊锛 */
+static void can_redraw_viewport(void)
+{
+    uint8_t i;
+    TFT_FillRect(0, SCR_VIEW_Y, 233, SCR_VIEW_H, UI_BG);
+    for (i = 0; i < CAN_ROW_COUNT; i++) {
+        int16_t y = (int16_t)(SCR_VIEW_Y - g_sys.pixel_offset + i * SCR_ROW_H);
+        if (y < (int16_t)SCR_VIEW_Y || y + SCR_ROW_H > (int16_t)(SCR_VIEW_Y + SCR_VIEW_H)) continue;
+        can_draw_row(i, (uint16_t)y);
+    }
+    draw_scrollbar(CAN_ROW_COUNT, 5, (uint8_t)(g_sys.pixel_offset / SCR_ROW_H), SCR_VIEW_Y, SCR_VIEW_H);
+}
+
+/* CAN 椤电紪鐮佸櫒婊氬姩锛氭洿鏂伴変腑绱㈠紩(寰鐜)涓 pixel_offset锛岄噸缁樺彲瑙嗗尯 */
+void UI_CanScroll(int dir)
+{
+    int16_t target, max_off;
+    if (dir > 0) g_sys.selected_item = (uint8_t)((g_sys.selected_item + 1) % CAN_ROW_COUNT);
+    else g_sys.selected_item = (g_sys.selected_item == 0) ? (uint8_t)(CAN_ROW_COUNT - 1) : (uint8_t)(g_sys.selected_item - 1);
+    target = (int16_t)g_sys.selected_item * SCR_ROW_H;
+    if (target < g_sys.pixel_offset) g_sys.pixel_offset = target;
+    else if (target + SCR_ROW_H > g_sys.pixel_offset + SCR_VIEW_H) g_sys.pixel_offset = (int16_t)(target + SCR_ROW_H - SCR_VIEW_H);
+    max_off = (int16_t)(CAN_ROW_COUNT * SCR_ROW_H - SCR_VIEW_H);
+    if (g_sys.pixel_offset < 0) g_sys.pixel_offset = 0;
+    if (max_off > 0 && g_sys.pixel_offset > max_off) g_sys.pixel_offset = max_off;
+    can_redraw_viewport();
+}
+
+/* ===================== 闊充箰椤 =====================
+ * SCREEN_MUSIC锛氫笁琛岋紙涓婁紶闊充箰 / 闊充箰鍒楄〃 / 閫�鍑汉锛�
+ * SCREEN_MUSIC_LIST锛氬姩鎬佽岋紙鏇茬洰+閫�鍑汉锛夛紝闀垮悕璺戦╃侊紝鎾�鏀捐屾樉绀鸿繘搴 */
+#define MUSIC_ROW_COUNT 3
+
+static void music_draw_row(uint8_t i, uint16_t y, uint8_t selected)
+{
+    static const char *labels[MUSIC_ROW_COUNT] = {"上传音乐", "音乐列表", "退出"};
+    uint16_t bg = selected ? UI_ACCENT : UI_BG;
+    TFT_FillRect(5, y, 230, 18, bg);
+    TFT_DrawStringZh(18, (uint16_t)(y + 1), labels[i], (uint16_t)(selected ? UI_FG : UI_FG_DIM), bg);
+}
+
+static void music_redraw_viewport(void)
+{
+    uint8_t i;
+    TFT_FillRect(0, SCR_VIEW_Y, 233, SCR_VIEW_H, UI_BG);
+    for (i = 0; i < MUSIC_ROW_COUNT; i++) {
+        int16_t y = (int16_t)(SCR_VIEW_Y - g_sys.pixel_offset + i * SCR_ROW_H);
+        if (y < (int16_t)SCR_VIEW_Y || y + SCR_ROW_H > (int16_t)(SCR_VIEW_Y + SCR_VIEW_H)) continue;
+        music_draw_row(i, (uint16_t)y, i == g_sys.selected_item);
+    }
+}
+
+void UI_MusicScroll(int dir)
+{
+    int16_t target, max_off;
+    if (dir > 0) g_sys.selected_item = (uint8_t)((g_sys.selected_item + 1) % MUSIC_ROW_COUNT);
+    else g_sys.selected_item = (g_sys.selected_item == 0) ? (uint8_t)(MUSIC_ROW_COUNT - 1) : (uint8_t)(g_sys.selected_item - 1);
+    target = (int16_t)g_sys.selected_item * SCR_ROW_H;
+    if (target < g_sys.pixel_offset) g_sys.pixel_offset = target;
+    else if (target + SCR_ROW_H > g_sys.pixel_offset + SCR_VIEW_H) g_sys.pixel_offset = (int16_t)(target + SCR_ROW_H - SCR_VIEW_H);
+    max_off = (int16_t)(MUSIC_ROW_COUNT * SCR_ROW_H - SCR_VIEW_H);
+    if (g_sys.pixel_offset < 0) g_sys.pixel_offset = 0;
+    if (max_off > 0 && g_sys.pixel_offset > max_off) g_sys.pixel_offset = max_off;
+    music_redraw_viewport();
+}
+
+void UI_DrawMusic(void)
+{
+    uint8_t i;
+    TFT_FillScreen(UI_BG);
+    draw_page_title_zh("音乐", COLOR_CYAN);
+    for (i = 0; i < MUSIC_ROW_COUNT; i++) {
+        int16_t y = (int16_t)(SCR_VIEW_Y - g_sys.pixel_offset + i * SCR_ROW_H);
+        if (y < (int16_t)SCR_VIEW_Y || y + SCR_ROW_H > (int16_t)(SCR_VIEW_Y + SCR_VIEW_H)) continue;
+        music_draw_row(i, (uint16_t)y, i == g_sys.selected_item);
+    }
+}
+
+/* ---- 闊充箰鍒楄〃锛氳屾暟 = 鏇茬洰鏁 + 閫�鍑� ---- */
+static uint16_t music_list_count(void)
+{
+    uint16_t t = MusicPlay_TrackCount();
+    return (uint16_t)(t + 1);   /* +1 退出 */
+}
+
+/* 褰撳墠閫変腑琛屼负闀垮悕鏇茬洰锛堥渶瑕佽窇椹鐏锛 */
+static uint8_t music_list_top_long(void)
+{
+    char buf[24];
+    uint16_t i = g_sys.selected_item;
+    if (i >= MusicPlay_TrackCount()) return 0;
+    if (MusicPlay_GetTitle(i, buf, sizeof(buf)) != 0) return 0;
+    return (zh_str_width(buf) > 168) ? 1 : 0;
+}
+
+static void music_list_draw_row(uint16_t i, uint16_t y, uint8_t selected)
+{
+    char buf[24];
+    uint16_t w;
+    uint16_t bg = selected ? UI_ACCENT : UI_BG;
+    if (i >= MusicPlay_TrackCount()) {       /* 閫�鍑汉� */
+        TFT_FillRect(8, y, 224, 18, bg);
+        TFT_DrawStringZh(18, (uint16_t)(y + 1), "退出",
+                         (uint16_t)(selected ? UI_FG : UI_FG_DIM), bg);
+        return;
+    }
+    if (MusicPlay_GetTitle(i, buf, sizeof(buf)) != 0) buf[0] = 0;
+    /* 鏇插悕杈冮暱 鈫 琛屽唴妯鍚戞粴鍔锛堣窇椹鐏锛 */
+    w = zh_str_width(buf);
+    if (w > 168) {
+        uint16_t mq = (uint16_t)(g_sys.music_marquee % (w + 24 + 16));
+        TFT_FillRect(8, y, 224, 18, bg);
+        TFT_DrawStringZh((uint16_t)(18 - mq), (uint16_t)(y + 1), buf, UI_FG, bg);
+        if (mq > 24) TFT_DrawStringZh((uint16_t)(18 - mq + w + 24), (uint16_t)(y + 1), buf, UI_FG, bg);
+        return;
+    }
+    TFT_FillRect(8, y, 224, 18, bg);
+    TFT_DrawStringZh(18, (uint16_t)(y + 1), buf,
+                     (uint16_t)(selected ? UI_FG : UI_FG_DIM), bg);
+    /* 鎾鏀句腑琛岋細鍙充晶鏄剧ず杩涘害锛堢櫨鍒嗘瘮锛宻cale2 鏇存竻鏅帮級 */
+    if (MusicPlay_IsPlaying() && MusicPlay_CurTrack() == i) {
+        char p[8];
+        sprintf(p, "%d%%", (int)MusicPlay_ProgressPct());
+        TFT_FillRect(172, (uint16_t)(y - 1), 60, 20, bg);
+        TFT_DrawString(178, (uint16_t)(y - 1), p, COLOR_CYAN, bg, 2);
+    }
+}
+
+/* 浠呭埛鏂版挱鏀捐岀殑鍙充晶杩涘害鍖猴紙閬垮厤鏁磋嗗彛閲嶇粯闂鐑 + 涓嶉噸璇 Flash 鏇插悕锛 */
+static void music_list_refresh_progress(void)
+{
+    uint16_t i = MusicPlay_CurTrack();
+    uint16_t so = (uint16_t)(g_sys.pixel_offset / 20);
+    uint16_t y;
+    uint8_t selected;
+    char p[8];
+    if (!MusicPlay_IsPlaying()) return;
+    if (i >= music_list_count()) return;
+    y = (uint16_t)(36 + ((int16_t)i - (int16_t)so) * 20);
+    if (y < 36 || y + 18 > 36 + 100) return;
+    selected = (i == g_sys.selected_item);
+    sprintf(p, "%d%%", (int)MusicPlay_ProgressPct());
+    TFT_FillRect(172, (uint16_t)(y - 1), 60, 20, selected ? UI_ACCENT : UI_BG);
+    TFT_DrawString(178, (uint16_t)(y - 1), p, COLOR_CYAN, selected ? UI_ACCENT : UI_BG, 2);
+}
+
+static void music_list_redraw_viewport(void)
+{
+    uint16_t cnt = music_list_count();
+    uint16_t i, so;
+    so = (uint16_t)(g_sys.pixel_offset / 20);
+    TFT_FillRect(0, 36, TFT_WIDTH, 100, UI_BG);
+    for (i = so; i < cnt; i++) {
+        uint16_t y = (uint16_t)(36 + ((int16_t)i - (int16_t)so) * 20);
+        if (y < 36 || y + 18 > 36 + 100) continue;
+        music_list_draw_row(i, y, i == g_sys.selected_item);
+    }
+    draw_scrollbar(cnt, 5, (uint8_t)(g_sys.pixel_offset / 20), 36, 100);
+}
+
+void UI_MusicListScroll(int dir)
+{
+    uint16_t cnt = music_list_count();
+    int16_t target, max_off;
+    if (dir > 0) g_sys.selected_item = (g_sys.selected_item + 1 >= cnt) ? 0 : (uint8_t)(g_sys.selected_item + 1);
+    else g_sys.selected_item = (g_sys.selected_item == 0) ? (uint8_t)(cnt - 1) : (uint8_t)(g_sys.selected_item - 1);
+    target = (int16_t)g_sys.selected_item * 20;
+    if (target < g_sys.pixel_offset) g_sys.pixel_offset = target;
+    else if (target + 20 > g_sys.pixel_offset + 100) g_sys.pixel_offset = (int16_t)(target + 20 - 100);
+    max_off = (int16_t)(cnt * 20 - 100);
+    if (g_sys.pixel_offset < 0) g_sys.pixel_offset = 0;
+    if (max_off > 0 && g_sys.pixel_offset > max_off) g_sys.pixel_offset = max_off;
+    music_list_redraw_viewport();
+}
+
+void UI_DrawMusicList(void)
+{
+    TFT_FillScreen(UI_BG);
+    draw_page_title_zh("音乐列表", UI_ACCENT2);
+    music_list_redraw_viewport();
+}
+
+/* 涓婁紶闊充箰寮圭獥锛氭牴鎹涓嶅悓闃舵垫樉绀烘彁绀/杩涘害鏉 */
+void UI_DrawMusicPopup(void)
+{
+    uint16_t pw = 190, ph = 110;
+    uint16_t px = (TFT_WIDTH - pw) / 2;
+    uint16_t py = 12;                 /* 椤堕儴寮瑰嚭锛屽簳閮ㄧ暀姝ラゆ枃瀛 */
+    char buf[24];
+    fill_round_rect(px, py, pw, ph, UI_CARD, 8);
+    draw_round_outline(px, py, pw, ph, UI_ACCENT2, 8, 2);
+    if (g_sys.music_popup == 1) {
+        TFT_DrawStringZh((TFT_WIDTH - zh_str_width("单击开启上传AP")) / 2U, (uint16_t)(py + 14), "单击开启上传AP", UI_FG, UI_CARD);
+    } else if (g_sys.music_popup == 2) {
+        TFT_DrawStringZh((TFT_WIDTH - zh_str_width("连接热点")) / 2U, (uint16_t)(py + 14), "连接热点", UI_FG, UI_CARD);
+        TFT_DrawString((TFT_WIDTH - 10 * 12U) / 2U, (uint16_t)(py + 36), "QIMINGXING", COLOR_CYAN, UI_CARD, 2);
+        TFT_DrawString((TFT_WIDTH - 9 * 6U) / 2U, (uint16_t)(py + 66), "192.168.4.1", COLOR_GREEN, UI_CARD, 1);
+        TFT_DrawStringZh((TFT_WIDTH - zh_str_width("点击关闭")) / 2U, (uint16_t)(py + 88), "点击关闭", UI_FG_DIM, UI_CARD);
+    } else if (g_sys.music_popup == 3) {
+        TFT_DrawStringZh((TFT_WIDTH - zh_str_width("上传中")) / 2U, (uint16_t)(py + 14), "上传中", UI_FG, UI_CARD);
+        {
+            uint8_t pct = g_sys.music_upload_pct;
+            fill_round_rect((uint16_t)(px + 25), (uint16_t)(py + 40), 140, 14, UI_BG, 7);
+            if (pct) fill_round_rect((uint16_t)(px + 26), (uint16_t)(py + 41), (uint16_t)(138U * pct / 100U), 12, COLOR_GREEN, 6);
+            sprintf(buf, "%d%%", (int)pct);
+            TFT_DrawString((TFT_WIDTH - (uint16_t)(strlen(buf) * 6U)) / 2U, (uint16_t)(py + 62), buf, UI_FG_DIM, UI_CARD, 1);
+        }
+    } else if (g_sys.music_popup == 4) {
+        TFT_DrawStringZh((TFT_WIDTH - zh_str_width("上传完成")) / 2U, (uint16_t)(py + 14), "上传完成", COLOR_GREEN, UI_CARD);
+        TFT_DrawStringZh((TFT_WIDTH - zh_str_width("已存外部Flash")) / 2U, (uint16_t)(py + 44), "已存外部Flash", UI_FG_DIM, UI_CARD);
+    } else if (g_sys.music_popup == 5) {
+        TFT_DrawStringZh((TFT_WIDTH - zh_str_width("上传失败，再击重试")) / 2U, (uint16_t)(py + 14), "上传失败，再击重试", COLOR_RED, UI_CARD);
+    }
+}
+
+void UI_DrawCanScreen(void)
+{
+    uint8_t i;
+    TFT_FillScreen(UI_BG);
+    draw_page_title_zh("CAN设置", UI_ACCENT);
+    for (i = 0; i < CAN_ROW_COUNT; i++) {
+        int16_t y = (int16_t)(SCR_VIEW_Y - g_sys.pixel_offset + i * SCR_ROW_H);
+        if (y < (int16_t)SCR_VIEW_Y || y + SCR_ROW_H > (int16_t)(SCR_VIEW_Y + SCR_VIEW_H)) continue;
+        can_draw_row(i, (uint16_t)y);
+    }
+    draw_scrollbar(CAN_ROW_COUNT, 5, (uint8_t)(g_sys.pixel_offset / SCR_ROW_H), SCR_VIEW_Y, SCR_VIEW_H);
 }
 
 static Screen_t last_screen = (Screen_t)255;
 
 void UI_Update(void)
 {
+    /* 澶栭儴锛堢綉椤甸勮/CAN 鍛戒护绛夛級璇锋眰鏁村睆閲嶇粯锛氱疆浣嶅悗鏈杞寮哄埗璧版崲灞忓垎鏀 */
+    if (g_sys.ui_force_redraw) {
+        g_sys.ui_force_redraw = 0;
+        last_screen = (Screen_t)255;
+        return;
+    }
     if (g_sys.current_screen != last_screen) {
         g_sys.scroll_offset = 0;
         g_sys.pixel_offset = 0;
         last_screen = g_sys.current_screen;
-        /* 返回菜单：恢复进入子页前的选中项与滚动位置 */
+        /* 杩斿洖鑿滃崟锛氭仮澶嶈繘鍏ュ瓙椤靛墠鐨勯変腑椤逛笌婊氬姩浣嶇疆 */
         if (g_sys.current_screen == SCREEN_MENU) {
             g_sys.selected_item = g_sys.menu_selected;
             g_sys.pixel_offset = g_sys.menu_pixel_offset;
@@ -1922,7 +2259,7 @@ void UI_Update(void)
             case SCREEN_TEMP_ADJUST:   UI_DrawTempAdjust(); break;
             case SCREEN_TEMP_PID:      UI_DrawTempPid(); break;
             case SCREEN_TIME_ADJUST: {
-                /* 进入时间页：从 dry_time_sec 生成六位数字 */
+                /* 杩涘叆鏃堕棿椤碉細浠 dry_time_sec 鐢熸垚鍏浣嶆暟瀛 */
                 uint32_t h = g_sys.params.dry_time_sec / 3600;
                 uint32_t m = (g_sys.params.dry_time_sec % 3600) / 60;
                 uint32_t s = g_sys.params.dry_time_sec % 60;
@@ -1949,6 +2286,9 @@ void UI_Update(void)
             case SCREEN_ABOUT:         UI_DrawAbout(); break;
             case SCREEN_WIFI:          UI_DrawWiFiScreen(); break;
             case SCREEN_SETTINGS:      UI_DrawSettingsScreen(); break;
+            case SCREEN_CAN:           UI_DrawCanScreen(); break;
+            case SCREEN_MUSIC:         UI_DrawMusic(); break;
+            case SCREEN_MUSIC_LIST:    UI_DrawMusicList(); break;
             case SCREEN_OTA:
                 UI_ResetOTAScreen();
                 UI_DrawOTAScreen();
@@ -1964,10 +2304,10 @@ void UI_Update(void)
                 if (g_sys.ota_downloading || g_sys.ota_download_done) UI_DrawOTAScreen();
                 break;
             case SCREEN_MENU:
-                /* 像素滚动：滚动由编码器 UI_MenuScroll 直接重绘可视区，此处无需处理 */
+                /* 鍍忕礌婊氬姩锛氭粴鍔ㄧ敱缂栫爜鍣 UI_MenuScroll 鐩存帴閲嶇粯鍙瑙嗗尯锛屾ゅ勬棤闇澶勭悊 */
                 break;
             default:
-            /* 子页面：仅当该页面相关状态变化时才重绘，避免每 50ms 整屏刷新闪烁 */
+            /* 瀛愰〉闈锛氫粎褰撹ラ〉闈㈢浉鍏崇姸鎬佸彉鍖栨椂鎵嶉噸缁橈紝閬垮厤姣 50ms 鏁村睆鍒锋柊闂鐑 */
             {
                 static uint8_t last_sel = 0xFF;
                 static Screen_t last_scr = (Screen_t)0xFF;
@@ -1978,12 +2318,12 @@ void UI_Update(void)
     static uint8_t last_pid_prog = 0xFF;
     static uint8_t last_auto_prog = 0xFF;
     static uint8_t last_auto_run = 0xFF;
-    static uint8_t last_air = 0xFF, last_ptc = 0xFF;   /* 校准页实时温度监看 */
+    static uint8_t last_air = 0xFF, last_ptc = 0xFF;   /* 鏍″噯椤靛疄鏃舵俯搴︾洃鐪 */
                 uint8_t redraw = 0;
                 if (g_sys.current_screen != last_scr) {
                     redraw = 1;
                     last_scr = g_sys.current_screen;
-                    /* 重置各页面状态标记，保证首次进入时重绘 */
+                    /* 閲嶇疆鍚勯〉闈㈢姸鎬佹爣璁帮紝淇濊瘉棣栨¤繘鍏ユ椂閲嶇粯 */
                     last_sel = 0xFF; last_tc = 0xFF;
                     last_ptc_max = 0xFFFF; last_ptc_cool = 0xFFFF;
                     last_wifi = 0xFF;
@@ -2057,23 +2397,7 @@ void UI_Update(void)
                     }
                     case SCREEN_MOTOR_ADJUST: {
                         static uint32_t last_tmc_check = 0;
-                        static uint32_t last_anim_tick = 0;
-                        /* 静音滑块滑动动画：每 30ms 推进一帧，推进后重绘静音行 */
-                        if (g_sys.mute_anim != 0) {
-                            uint32_t now = SystemTime_Millis();
-                            if ((uint32_t)(now - last_anim_tick) >= 30U) {
-                                last_anim_tick = now;
-                                uint8_t is_tmc = (g_sys.params.motor_driver == MOTOR_DRIVER_TMC2208 ||
-                                                  g_sys.params.motor_driver == MOTOR_DRIVER_TMC2209);
-                                uint8_t mute_row = is_tmc ? 9 : 7;   /* 静音行索引（A4988 无电流项少一行） */
-                                g_sys.mute_anim++;
-                                if (g_sys.mute_anim > 12) g_sys.mute_anim = 0;
-                                refresh_motor_row(mute_row);
-                            }
-                        } else {
-                            last_anim_tick = 0;
-                        }
-                        /* 像素滚动由编码器 UI_MotorScroll 重绘可视区，此处不再整屏刷新 */
+                        /* 鍍忕礌婊氬姩鐢辩紪鐮佸櫒 UI_MotorScroll 閲嶇粯鍙瑙嗗尯锛屾ゅ勪笉鍐嶆暣灞忓埛鏂 */
                         if (!redraw && g_sys.motor_edit_active) {
                             static char last_m_row[32] = "";
                             char buf[32];
@@ -2083,23 +2407,21 @@ void UI_Update(void)
                                 refresh_motor_row(g_sys.selected_item);
                             }
                         }
-                        /* TMC 通讯状态每秒刷新诊断行（底部 box 区域） */
-                        if (!redraw && (g_sys.params.motor_driver == MOTOR_DRIVER_TMC2208 ||
-                                        g_sys.params.motor_driver == MOTOR_DRIVER_TMC2209)) {
+                        /* TMC 閫氳璇婃柇锛氳繘鍏ラ〉闈(redraw)鍏堟祴涓娆★紝涔嬪悗姣忕掑嶆祴鍒锋柊搴曡 */
+                        if (g_sys.params.motor_driver == MOTOR_DRIVER_TMC2208 ||
+                            g_sys.params.motor_driver == MOTOR_DRIVER_TMC2209) {
                             uint32_t now = SystemTime_Millis();
-                            if ((uint32_t)(now - last_tmc_check) >= 1000U) {
+                            if (redraw || (uint32_t)(now - last_tmc_check) >= 1000U) {
                                 last_tmc_check = now;
-                                uint8_t ok = Stepper_TmcComOk();
-                                uint16_t fg = ok ? COLOR_GREEN : COLOR_RED;
-                                fill_round_rect(5, 208, 230, 22, UI_CARD, 6);
-                                TFT_DrawString(12, 211, ok ? "TMC-COM:OK" : "TMC-COM:FAIL", fg, UI_CARD, 2);
+                                tmc_probe_update();
+                                if (!redraw) tmc_draw_diag();
                             }
                         }
                         break;
                     }
                     case SCREEN_PID_ADJUST:
                         if (g_sys.selected_item != last_sel) { redraw = 1; last_sel = g_sys.selected_item; }
-                        /* 编辑中每帧刷新当前行，值实时更新 */
+                        /* 缂栬緫涓姣忓抚鍒锋柊褰撳墠琛岋紝鍊煎疄鏃舵洿鏂 */
                         if (!redraw && g_sys.pid_edit_active) {
                             refresh_pid_row((uint8_t)(g_sys.pid_edit_active - 1));
                         }
@@ -2112,7 +2434,7 @@ void UI_Update(void)
                         }
                         break;
                     }
-                    case SCREEN_PRESET_LIST: {     /* 预设二级列表：滚动/确认弹窗局部刷新 */
+                    case SCREEN_PRESET_LIST: {     /* 棰勮句簩绾у垪琛锛氭粴鍔/纭璁ゅ脊绐楀眬閮ㄥ埛鏂 */
                         static uint8_t last_cy = 0xFF;
                         static uint8_t last_pc = 0xFF;
                         static int16_t last_po = -1000;
@@ -2124,7 +2446,7 @@ void UI_Update(void)
                             last_delmode = g_sys.preset_del_mode;
                             redraw = 1;
                         }
-                        /* 长按切换当前预设 → ">" 标记变化，整可视区刷新清掉旧标记残留 */
+                        /* 闀挎寜鍒囨崲褰撳墠棰勮 鈫 ">" 鏍囪板彉鍖栵紝鏁村彲瑙嗗尯鍒锋柊娓呮帀鏃ф爣璁版畫鐣 */
                         if (!redraw && g_sys.params.current_preset != last_cp) {
                             last_cp = g_sys.params.current_preset;
                             preset_redraw_viewport();
@@ -2132,12 +2454,12 @@ void UI_Update(void)
                             last_cp = g_sys.params.current_preset;
                         }
                         if (!redraw && g_sys.pixel_offset != last_po) {
-                            /* 滚动：整可视区重绘 */
+                            /* 婊氬姩锛氭暣鍙瑙嗗尯閲嶇粯 */
                             last_po = g_sys.pixel_offset;
                             last_pitem = g_sys.selected_item;
                             preset_redraw_viewport();
                         } else if (!redraw && g_sys.selected_item != last_pitem) {
-                            /* 视口内移动光标：只重绘旧/新两行 */
+                            /* 瑙嗗彛鍐呯Щ鍔ㄥ厜鏍囷細鍙閲嶇粯鏃/鏂颁袱琛 */
                             uint8_t old = last_pitem;
                             last_pitem = g_sys.selected_item;
                             last_po = g_sys.pixel_offset;
@@ -2149,14 +2471,14 @@ void UI_Update(void)
                             last_pitem = g_sys.selected_item;
                         }
                         if (g_sys.preset_confirm != last_pc) {
-                            if (last_pc == 1 && g_sys.preset_confirm == 0) redraw = 1;   /* 关闭弹窗清残留 */
+                            if (last_pc == 1 && g_sys.preset_confirm == 0) redraw = 1;   /* 鍏抽棴寮圭獥娓呮畫鐣 */
                             last_pc = g_sys.preset_confirm;
                             last_cy = 0xFF;
                         }
-                        /* 光标移动：只重绘弹窗内容，不整屏刷新 */
+                        /* 鍏夋爣绉诲姩锛氬彧閲嶇粯寮圭獥鍐呭癸紝涓嶆暣灞忓埛鏂 */
                         if (!redraw && g_sys.preset_confirm == 1 && g_sys.preset_confirm_yes != last_cy) {
                             last_cy = g_sys.preset_confirm_yes;
-                            draw_confirm_popup("确认删除该预设");
+                            draw_confirm_popup("确定删除预设");
                         }
                         break;
                     }
@@ -2172,17 +2494,17 @@ void UI_Update(void)
                         Preset_t *p = ui_preset_ptr();
                         if (g_sys.preset_confirm != last_pcf) {
                             last_pcf = g_sys.preset_confirm;
-                            redraw = 1;              /* 弹窗开/关整页重绘：画上标题、关时清背景 */
+                            redraw = 1;              /* 寮圭獥寮/鍏虫暣椤甸噸缁橈細鐢讳笂鏍囬樸佸叧鏃舵竻鑳屾櫙 */
                         }
-                        if (g_sys.preset_confirm == 2) {   /* 保存确认：是/否只刷新弹窗 */
+                        if (g_sys.preset_confirm == 2) {   /* 淇濆瓨纭璁わ細鏄�/鍚﹀彧鍒锋柊寮圭獥 */
                             if (g_sys.preset_confirm_yes != last_cy2) {
                                 last_cy2 = g_sys.preset_confirm_yes;
-                                if (!redraw) draw_confirm_popup("确认保存");
+                                if (!redraw) draw_confirm_popup("确定保存");
                             }
                             if (g_sys.preset_confirm != 2) last_cy2 = 0xFF;
                         } else {
                             last_cy2 = 0xFF;
-                            /* 行光标移动：名称/温度/时间/保存/退出 高亮行需实时重绘整页 */
+                            /* 琛屽厜鏍囩Щ鍔锛氬悕绉/娓╁害/鏃堕棿/淇濆瓨/閫�鍑� 楂樹寒琛岄渶瀹炴椂閲嶇粯鏁撮〉 */
                             if (!redraw && g_sys.preset_row != last_prow) {
                                 last_prow = g_sys.preset_row;
                                 redraw = 1;
@@ -2228,11 +2550,11 @@ void UI_Update(void)
                                             ((uint32_t)g_sys.time_digits[2] << 8) | ((uint32_t)g_sys.time_digits[3] << 12) |
                                             ((uint32_t)g_sys.time_digits[4] << 16) | ((uint32_t)g_sys.time_digits[5] << 20);
                         if (g_sys.time_edit_active != last_edit) {
-                            /* 编辑态切换：立即重绘当前位光标（进=橙轮廓，退=普通轮廓） */
+                            /* 缂栬緫鎬佸垏鎹锛氱珛鍗抽噸缁樺綋鍓嶄綅鍏夋爣锛堣繘=姗欒疆寤擄紝閫=鏅閫氳疆寤擄級 */
                             last_edit = g_sys.time_edit_active;
                             if (!redraw && g_sys.time_cursor < TIME_DIGIT_COUNT) {
                                 refr_time_digit((uint8_t)g_sys.time_cursor,
-                                                g_sys.time_edit_active ? UI_TEXT : COLOR_CYAN,
+                                                g_sys.time_edit_active ? TIME_EDIT_TXT : COLOR_CYAN,
                                                 g_sys.time_edit_active ? COLOR_ORANGE : UI_ACCENT2);
                             }
                             last_tc = g_sys.time_cursor;
@@ -2240,9 +2562,9 @@ void UI_Update(void)
                             break;
                         }
                         if (g_sys.time_edit_active) {
-                            /* 编辑态：数值/光标变化时重绘当前位 */
+                            /* 缂栬緫鎬侊細鏁板/鍏夋爣鍙樺寲鏃堕噸缁樺綋鍓嶄綅 */
                             if (!redraw && (g_sys.time_cursor != last_tc || dig_hash != last_dig_hash)) {
-                                refr_time_digit((uint8_t)g_sys.time_cursor, UI_TEXT, COLOR_ORANGE);
+                                refr_time_digit((uint8_t)g_sys.time_cursor, TIME_EDIT_TXT, COLOR_ORANGE);
                             }
                             last_tc = g_sys.time_cursor;
                             last_dig_hash = dig_hash;
@@ -2280,10 +2602,27 @@ void UI_Update(void)
                             }
                         }
                         break;
-                    case SCREEN_WIFI:
+                    case SCREEN_WIFI: {
+                        static uint8_t last_wedit = 0xFF;
                         if (g_sys.selected_item != last_sel) { redraw = 1; last_sel = g_sys.selected_item; }
                         if (g_sys.wifi_enabled != last_wifi) { redraw = 1; last_wifi = g_sys.wifi_enabled; }
+                        if (g_sys.wifi_edit_active != last_wedit) { redraw = 1; last_wedit = g_sys.wifi_edit_active; }
+                        /* ESP 閾捐矾鐘舵/IP 鍙樺寲锛氬眬閮ㄩ噸缁樺紑鍏宠岋紙涓嶆暣灞忛棯锛 */
+                        {
+                            static uint8_t last_lstate = 0xFF;
+                            static char last_lip[16] = "";
+                            uint8_t lst = (uint8_t)EspLink_State();
+                            if (!redraw && (lst != last_lstate || strcmp(EspLink_IP(), last_lip) != 0)) {
+                                last_lstate = lst;
+                                strncpy(last_lip, EspLink_IP(), 15);
+                                wifi_draw_row(0, 30, (uint8_t)(g_sys.selected_item == 0 ? 1 : 0));
+                            } else {
+                                last_lstate = lst;
+                                strncpy(last_lip, EspLink_IP(), 15);
+                            }
+                        }
                         break;
+                    }
                     case SCREEN_TEMP_PID:
                         if (g_sys.temp_pid_running != last_auto_run) {
                             redraw = 1; last_auto_run = g_sys.temp_pid_running;
@@ -2322,9 +2661,9 @@ void UI_Update(void)
                         break;
                     case SCREEN_SETTINGS: {
                         static char last_ss_row[24] = "";
-                        static uint8_t last_pop_item = 0xFF;   /* 0xFF=无弹窗 */
-                        /* 像素滚动由编码器 UI_SettingsScroll 重绘可视区，此处不再整屏刷新 */
-                        /* 编辑中实时刷新当前行（值变化才重绘；音量/亮度走弹窗，不刷新行避免闪烁） */
+                        static uint8_t last_pop_item = 0xFF;   /* 0xFF=鏃犲脊绐 */
+                        /* 鍍忕礌婊氬姩鐢辩紪鐮佸櫒 UI_SettingsScroll 閲嶇粯鍙瑙嗗尯锛屾ゅ勪笉鍐嶆暣灞忓埛鏂 */
+                        /* 缂栬緫涓瀹炴椂鍒锋柊褰撳墠琛岋紙鍊煎彉鍖栨墠閲嶇粯锛涢煶閲/浜搴﹁蛋寮圭獥锛屼笉鍒锋柊琛岄伩鍏嶉棯鐑侊級 */
                         if (!redraw && g_sys.settings_edit_active &&
                             g_sys.selected_item != 1 && g_sys.selected_item != 3 && g_sys.selected_item != 6) {
                             char buf[24];
@@ -2334,7 +2673,7 @@ void UI_Update(void)
                                 refresh_settings_row(g_sys.selected_item);
                             }
                         }
-                        /* RGB 亮度弹窗：光标(sel/编辑态)变化重绘结构；值变化仅刷该条；关闭整屏重绘清残留 */
+                        /* RGB 浜搴﹀脊绐楋細鍏夋爣(sel/缂栬緫鎬)鍙樺寲閲嶇粯缁撴瀯锛涘煎彉鍖栦粎鍒疯ユ潯锛涘叧闂鏁村睆閲嶇粯娓呮畫鐣 */
                         {
                             static uint8_t last_rbp = 0xFF;
                             static uint8_t last_rbs = 0xFF;
@@ -2357,7 +2696,7 @@ void UI_Update(void)
                                 }
                             }
                         }
-                        /* 蜂鸣器音量(1)/亮度(3) 编辑弹窗：仅在打开或数值变化时重绘（避免闪烁），
+                        /* 铚傞福鍣ㄩ煶閲�(1)/浜搴(3) 缂栬緫寮圭獥锛氫粎鍦ㄦ墦寮鎴栨暟鍊煎彉鍖栨椂閲嶇粯锛堥伩鍏嶉棯鐑侊級锛
                          * 关闭后整屏重绘清残留 */
                         {
                             static char last_pop_val[16] = "";
@@ -2378,6 +2717,73 @@ void UI_Update(void)
                                 if (strcmp(pv, last_pop_val) != 0) {
                                     strcpy(last_pop_val, pv);
                                     draw_settings_popup(pop);
+                                }
+                            }
+                        }
+                        break;
+                    }
+                    case SCREEN_CAN: {
+                        static uint8_t last_cn = 0xFF;
+                        static uint8_t last_jn = 0xFF;
+                        static char last_cr[24] = "";
+                        /* 宸茶繛鎺ユ暟 / 鍏ョ綉鐘舵 瀹炴椂鍒锋柊 */
+                        if (g_sys.can_connected != last_cn || g_sys.can_joined != last_jn) {
+                            last_cn = g_sys.can_connected;
+                            last_jn = g_sys.can_joined;
+                            refresh_can_row(3);
+                        }
+                        /* 鎼滅储鎻愮ず甯э細閫掑噺鍚庢竻闄 */
+                        if (g_sys.can_search_tick) {
+                            g_sys.can_search_tick--;
+                            if (g_sys.can_search_tick == 0) refresh_can_row(2);
+                        }
+                        /* 缂栬緫涓鍊煎彉鍖栧疄鏃跺埛鏂板綋鍓嶈 */
+                        if (g_sys.can_edit_active) {
+                            char buf[24];
+                            can_row_str(g_sys.selected_item, buf);
+                            if (strcmp(buf, last_cr) != 0) {
+                                strcpy(last_cr, buf);
+                                refresh_can_row(g_sys.selected_item);
+                            }
+                        }
+                        break;
+                    }
+                    case SCREEN_MUSIC: {
+                        /* 涓婁紶杩涘害寮圭獥姣 100ms 鍒锋柊涓娆★紱瀹屾垚/澶辫触鐭鏄惧悗鑷鍔ㄦ敹璧 */
+                        static uint8_t last_mup = 0xFF;
+                        static uint32_t last_ms = 0;
+                        uint32_t nowm = SystemTime_Millis();
+                        if (g_sys.music_popup != last_mup) {
+                            last_mup = g_sys.music_popup;
+                            redraw = 1;
+                        }
+                        if (g_sys.music_popup == 3 && (uint32_t)(nowm - last_ms) >= 100) {
+                            last_ms = nowm;
+                            UI_DrawMusicPopup();
+                        }
+                        if ((g_sys.music_popup == 4 || g_sys.music_popup == 5) &&
+                            (uint32_t)(nowm - last_ms) >= 1800 && last_ms != 0) {
+                            g_sys.music_popup = 0;
+                            redraw = 1;
+                        }
+                        break;
+                    }
+                    case SCREEN_MUSIC_LIST: {
+                        /* 鎾鏀捐岃繘搴︼紙灞閮ㄥ埛鏂帮紝涓嶆暣瑙嗗彛閲嶇粯閬垮厤闂鐑/鍗￠】锛+ 闀垮悕璺戦┈鐏 */
+                        static uint32_t last_ml = 0;
+                        uint32_t nowm = SystemTime_Millis();
+                        if ((uint32_t)(nowm - last_ml) >= 150) {
+                            last_ml = nowm;
+                            if (MusicPlay_IsPlaying()) music_list_refresh_progress();
+                            if (music_list_top_long()) {
+                                g_sys.music_marquee += 2;
+                                /* 浠呴噸缁橀暱鍚嶉変腑琛 */
+                                {
+                                    uint16_t so = (uint16_t)(g_sys.pixel_offset / 20);
+                                    uint16_t y = (uint16_t)(36 + ((int16_t)g_sys.selected_item - (int16_t)so) * 20);
+                                    if (y >= 36 && y + 18 <= 36 + 100) {
+                                        music_list_draw_row(g_sys.selected_item, y, 1);
+                                    }
                                 }
                             }
                         }
@@ -2404,6 +2810,10 @@ void UI_Update(void)
             case SCREEN_PRESET_EDIT:   UI_DrawPresetEdit(); break;
 case SCREEN_SAFETY_ALERT:  UI_DrawSafetyAlert(); break;
                         case SCREEN_SETTINGS:       UI_DrawSettingsScreen(); break;
+                        case SCREEN_CAN:            UI_DrawCanScreen(); break;
+                        case SCREEN_MUSIC:          UI_DrawMusic();
+                                                    if (g_sys.music_popup) UI_DrawMusicPopup(); break;
+                        case SCREEN_MUSIC_LIST:     UI_DrawMusicList(); break;
                         default: break;
                     }
                 }
@@ -2421,7 +2831,7 @@ void UI_UpdateMainDynamic(void)
     static char last_val[4][32];
     static uint8_t last_state = 0xFF;
 
-    /* 烘干状态变化时只重绘第5卡的状态文字；IDLE 时不显示文字 */
+    /* 鐑樺共鐘舵佸彉鍖栨椂鍙閲嶇粯绗5鍗＄殑鐘舵佹枃瀛楋紱IDLE 鏃朵笉鏄剧ず鏂囧瓧 */
     if ((uint8_t)g_sys.run_state != last_state) {
         last_state = (uint8_t)g_sys.run_state;
         static const char *sstr[] = {"停止烘干","开始烘干","开始烘干","开始烘干","停止烘干","停止烘干"};
@@ -2432,7 +2842,7 @@ void UI_UpdateMainDynamic(void)
         TFT_DrawStringZh(166, 103, s, scol[g_sys.run_state], fill);
     }
 
-    /* 卡1 TEMP 117x42 @(2,2) */
+    /* 鍗1 TEMP 117x42 @(2,2) */
     main_card_rect(0, &x, &y, &w, &ch);
     sprintf(buf, "%.1f", g_sys.current_temp);
     if (strcmp(buf, last_val[0]) != 0) {
@@ -2442,7 +2852,7 @@ void UI_UpdateMainDynamic(void)
         strcpy(last_val[0], buf);
     }
 
-    /* 卡2 湿度 117x42 @(121,2) */
+    /* 鍗2 婀垮害 117x42 @(121,2) */
     main_card_rect(1, &x, &y, &w, &ch);
     sprintf(buf, "%.1f%%", g_sys.current_humidity);
     if (strcmp(buf, last_val[1]) != 0) {
@@ -2452,7 +2862,7 @@ void UI_UpdateMainDynamic(void)
         strcpy(last_val[1], buf);
     }
 
-    /* 卡3 WEIGHT 117x42 @(2,46) */
+    /* 鍗3 WEIGHT 117x42 @(2,46) */
     main_card_rect(2, &x, &y, &w, &ch);
     sprintf(buf, "%d", (int)fmt_weight_g());
     if (strcmp(buf, last_val[2]) != 0) {
@@ -2462,7 +2872,7 @@ void UI_UpdateMainDynamic(void)
         strcpy(last_val[2], buf);
     }
 
-    /* 卡4 PTC 117x42 @(121,46) */
+    /* 鍗4 PTC 117x42 @(121,46) */
     main_card_rect(3, &x, &y, &w, &ch);
     sprintf(buf, "%d", (int)(g_sys.ptc_temp + 0.5f));
     if (strcmp(buf, last_val[3]) != 0) {
@@ -2472,8 +2882,8 @@ void UI_UpdateMainDynamic(void)
         strcpy(last_val[3], buf);
     }
 
-    /* 卡5 烘干时间 236x43 @(2,90)：时间数字仅变化时重绘。
-     * 烘干中主显示=剩余倒计时(大字)；空闲主显示=设定时间 */
+    /* 鍗5 鐑樺共鏃堕棿 236x43 @(2,90)锛氭椂闂存暟瀛椾粎鍙樺寲鏃堕噸缁樸
+     * 鐑樺共涓涓绘樉绀=鍓╀綑鍊掕℃椂(澶у瓧)锛涚┖闂蹭富鏄剧ず=璁惧畾鏃堕棿 */
     main_card_rect(4, &x, &y, &w, &ch);
     {
         static char last_rem_str[16] = "";

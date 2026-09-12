@@ -3,8 +3,7 @@ name: Project
 type: ARM
 deviceName: STM32F103CB
 packDir: .pack/Keil/STM32F1xx_DFP.2.3.0
-srcDirs:
-  - ../../app
+srcDirs: []
 virtualFolder:
   name: <virtual_root>
   files: []
@@ -44,6 +43,8 @@ virtualFolder:
         - path: ../../module/esp_at.h
         - path: ../../module/esp_http_bridge.c
         - path: ../../module/esp_http_bridge.h
+        - path: ../../module/esp_link.c
+        - path: ../../module/esp_link.h
         - path: ../../module/http_server.c
         - path: ../../module/http_server.h
         - path: ../../module/mod_littlefs.h
@@ -55,6 +56,18 @@ virtualFolder:
         - path: ../../module/mod_wifi_config.h
         - path: ../../module/mod_wifi_manager.c
         - path: ../../module/mod_wifi_manager.h
+        - path: ../../module/can_cluster.c
+        - path: ../../module/can_cluster.h
+        - path: ../../module/music_fw.c
+        - path: ../../module/music_format.h
+        - path: ../../module/music_data.c
+        - path: ../../module/music_data.h
+        - path: ../../module/music_store.c
+        - path: ../../module/music_store.h
+        - path: ../../module/music_ota.c
+        - path: ../../module/music_ota.h
+        - path: ../../module/music_play.c
+        - path: ../../module/music_play.h
         - path: ../../module/ota_boot_request_store.h
         - path: ../../module/ota_display.h
         - path: ../../module/ota_http.c
@@ -90,6 +103,7 @@ virtualFolder:
         - path: ../../bsp/bsp_aht20.h
         - path: ../../bsp/bsp_buzzer.c
         - path: ../../bsp/bsp_buzzer.h
+        - path: ../../bsp/bsp_can.c
         - path: ../../bsp/bsp_can.h
         - path: ../../bsp/bsp_cs1237.c
         - path: ../../bsp/bsp_cs1237.h
@@ -172,6 +186,7 @@ targets:
         - USE_STDPERIPH_DRIVER
         - VECT_TAB_OFFSET=0x3400
         - STM32F10X_MD
+        - music
       incList:
         - .
         - ../../app
@@ -186,7 +201,8 @@ targets:
         - .cmsis/include
         - RTE/_APP
       libList: []
-    excludeList: []
+    excludeList:
+      - <virtual_root>/Module/music_fw.c
     settings:
       debugger: cortex-debug
     toolchain: AC5
@@ -206,8 +222,7 @@ targets:
               abortAfterFailed: true
               command: fromelf.exe --bin --output ".\Objects\APP\dryer_app.bin" ".\Objects\APP\dryer_app.axf"
               disable: false
-          asm-compiler:
-            defines: []
+          asm-compiler: {}
           beforeBuildTasks: []
           c/cpp-compiler:
             CXX_FLAGS: --diag_suppress=1 --diag_suppress=1295
@@ -221,12 +236,9 @@ targets:
             output-debug-info: enable
             use-microLIB: true
           linker:
-            $outputTaskExcludes:
-              - .bin
             output-format: elf
             ro-base: "0x08003400"
             rw-base: "0x20000000"
-            xo-base: ""
         scatterFilePath: ""
         storageLayout:
           RAM:
@@ -339,26 +351,34 @@ targets:
         - RTE/_Bootloader
       libList: []
     excludeList:
-      - ../../app/ui_manager.c
-      - ../../app/ui_comp.c
-      - ../../app/system_config.c
-      - ../../bsp/bsp_encoder.c
-      - ../../bsp/bsp_fan.c
-      - ../../bsp/bsp_stepper.c
-      - ../../bsp/bsp_ptc.c
-      - ../../bsp/bsp_ntc.c
-      - ../../module/http_server.c
-      - ../../module/esp_at.c
-      - ../../module/esp_http_bridge.c
-      - ../../module/ota_upload.c
-      - ../../module/ota_http.c
-      - ../../module/ota_update_controller.c
-      - ../../module/mod_wifi_manager.c
-      - ../../module/mod_web_server.c
-      - ../../module/mod_ota.c
-      - ../../module/mod_wifi_config.c
-      - ../../libraries/STM32F10x_StdPeriph_Driver/src/stm32f10x_adc.c
-      - ../../app/main.c
+      - <virtual_root>/Module/ui_manager.c
+      - <virtual_root>/Module/ui_comp.c
+      - <virtual_root>/Module/system_config.c
+      - <virtual_root>/BSP/bsp_encoder.c
+      - <virtual_root>/BSP/bsp_can.c
+      - <virtual_root>/BSP/bsp_fan.c
+      - <virtual_root>/BSP/bsp_stepper.c
+      - <virtual_root>/BSP/bsp_ptc.c
+      - <virtual_root>/BSP/bsp_ntc.c
+      - <virtual_root>/Module/http_server.c
+      - <virtual_root>/Module/esp_at.c
+      - <virtual_root>/Module/esp_http_bridge.c
+      - <virtual_root>/Module/esp_link.c
+      - <virtual_root>/Module/can_cluster.c
+      - <virtual_root>/Module/music_fw.c
+      - <virtual_root>/Module/music_data.c
+      - <virtual_root>/Module/music_store.c
+      - <virtual_root>/Module/music_ota.c
+      - <virtual_root>/Module/music_play.c
+      - <virtual_root>/Module/ota_upload.c
+      - <virtual_root>/Module/ota_http.c
+      - <virtual_root>/Module/ota_update_controller.c
+      - <virtual_root>/Module/mod_wifi_manager.c
+      - <virtual_root>/Module/mod_web_server.c
+      - <virtual_root>/Module/mod_ota.c
+      - <virtual_root>/Module/mod_wifi_config.c
+      - <virtual_root>/StdPeriph/stm32f10x_adc.c
+      - <virtual_root>/Entry/main.c
     settings:
       debugger: cortex-debug
     toolchain: AC5
@@ -378,8 +398,7 @@ targets:
               abortAfterFailed: true
               command: fromelf.exe --bin --output ".\Objects\Bootloader\dryer_bootloader.bin" ".\Objects\Bootloader\dryer_bootloader.axf"
               disable: false
-          asm-compiler:
-            defines: []
+          asm-compiler: {}
           beforeBuildTasks: []
           c/cpp-compiler:
             CXX_FLAGS: --diag_suppress=1 --diag_suppress=1295
@@ -393,12 +412,9 @@ targets:
             output-debug-info: enable
             use-microLIB: true
           linker:
-            $outputTaskExcludes:
-              - .bin
             output-format: elf
             ro-base: "0x08000000"
             rw-base: "0x20000000"
-            xo-base: ""
         scatterFilePath: ""
         storageLayout:
           RAM:
@@ -474,6 +490,161 @@ targets:
                 startAddr: "0x0"
               tag: IROM
         useCustomScatterFile: false
+    uploadConfigMap:
+      JLink:
+        baseAddr: ""
+        bin: ""
+        cpuInfo:
+          cpuName: "null"
+          vendor: "null"
+        otherCmds: ""
+        proType: 1
+        speed: 8000
+      OpenOCD:
+        baseAddr: "0x08000000"
+        bin: ""
+        interface: stlink
+        target: stm32f1x
+    uploader: OpenOCD
+  Music:
+    cppPreprocessAttrs:
+      defineList: []
+      incList:
+        - .
+        - ../../module
+      libList: []
+    excludeList:
+      - <virtual_root>/BSP/bsp_aht20.c
+      - <virtual_root>/BSP/bsp_buzzer.c
+      - <virtual_root>/BSP/bsp_can.c
+      - <virtual_root>/BSP/bsp_cs1237.c
+      - <virtual_root>/BSP/bsp_encoder.c
+      - <virtual_root>/BSP/bsp_esp_uart_stm32.c
+      - <virtual_root>/BSP/bsp_fan.c
+      - <virtual_root>/BSP/bsp_internal_flash_stm32.c
+      - <virtual_root>/BSP/bsp_ntc.c
+      - <virtual_root>/BSP/bsp_ptc.c
+      - <virtual_root>/BSP/bsp_rgb_led.c
+      - <virtual_root>/BSP/bsp_spi1_bus.c
+      - <virtual_root>/BSP/bsp_stepper.c
+      - <virtual_root>/BSP/bsp_system_reset_stm32.c
+      - <virtual_root>/BSP/bsp_tft_port_stm32.c
+      - <virtual_root>/BSP/bsp_tft_st7789.c
+      - <virtual_root>/BSP/bsp_w25q128.c
+      - <virtual_root>/BSP/sfud.c
+      - <virtual_root>/BSP/sfud_port.c
+      - <virtual_root>/Board/board.c
+      - <virtual_root>/Bootloader/bl_esp01s.c
+      - <virtual_root>/Bootloader/bl_main.c
+      - <virtual_root>/Bootloader/bl_tft.c
+      - <virtual_root>/Bootloader/flash_ops.c
+      - <virtual_root>/Bootloader/upgrade_flag.c
+      - <virtual_root>/Entry/main.c
+      - <virtual_root>/Module/can_cluster.c
+      - <virtual_root>/Module/esp_at.c
+      - <virtual_root>/Module/esp_http_bridge.c
+      - <virtual_root>/Module/esp_link.c
+      - <virtual_root>/Module/http_server.c
+      - <virtual_root>/Module/mod_ota.c
+      - <virtual_root>/Module/mod_web_server.c
+      - <virtual_root>/Module/mod_wifi_config.c
+      - <virtual_root>/Module/mod_wifi_manager.c
+      - <virtual_root>/Module/music_data.c
+      - <virtual_root>/Module/music_ota.c
+      - <virtual_root>/Module/music_play.c
+      - <virtual_root>/Module/music_store.c
+      - <virtual_root>/Module/ota_boot_request_store.c
+      - <virtual_root>/Module/ota_display.c
+      - <virtual_root>/Module/ota_http.c
+      - <virtual_root>/Module/ota_metadata_store.c
+      - <virtual_root>/Module/ota_staging.c
+      - <virtual_root>/Module/ota_update_controller.c
+      - <virtual_root>/Module/ota_upload.c
+      - <virtual_root>/Module/stm32f10x_it.c
+      - <virtual_root>/Module/system_config.c
+      - <virtual_root>/Module/system_time.c
+      - <virtual_root>/Module/ui_comp.c
+      - <virtual_root>/Module/ui_manager.c
+      - <virtual_root>/Shared/ota_contract.c
+      - <virtual_root>/Startup/startup_stm32f10x_md.s
+      - <virtual_root>/StdPeriph/misc.c
+      - <virtual_root>/StdPeriph/stm32f10x_adc.c
+      - <virtual_root>/StdPeriph/stm32f10x_bkp.c
+      - <virtual_root>/StdPeriph/stm32f10x_can.c
+      - <virtual_root>/StdPeriph/stm32f10x_cec.c
+      - <virtual_root>/StdPeriph/stm32f10x_crc.c
+      - <virtual_root>/StdPeriph/stm32f10x_dac.c
+      - <virtual_root>/StdPeriph/stm32f10x_dbgmcu.c
+      - <virtual_root>/StdPeriph/stm32f10x_dma.c
+      - <virtual_root>/StdPeriph/stm32f10x_exti.c
+      - <virtual_root>/StdPeriph/stm32f10x_flash.c
+      - <virtual_root>/StdPeriph/stm32f10x_fsmc.c
+      - <virtual_root>/StdPeriph/stm32f10x_gpio.c
+      - <virtual_root>/StdPeriph/stm32f10x_i2c.c
+      - <virtual_root>/StdPeriph/stm32f10x_iwdg.c
+      - <virtual_root>/StdPeriph/stm32f10x_pwr.c
+      - <virtual_root>/StdPeriph/stm32f10x_rcc.c
+      - <virtual_root>/StdPeriph/stm32f10x_rtc.c
+      - <virtual_root>/StdPeriph/stm32f10x_sdio.c
+      - <virtual_root>/StdPeriph/stm32f10x_spi.c
+      - <virtual_root>/StdPeriph/stm32f10x_tim.c
+      - <virtual_root>/StdPeriph/stm32f10x_usart.c
+      - <virtual_root>/StdPeriph/stm32f10x_wwdg.c
+      - <virtual_root>/System/system_stm32f10x.c
+    settings:
+      debugger: cortex-debug
+    toolchain: AC5
+    toolchainConfigMap:
+      AC5:
+        archExtensions: ""
+        cpuType: Cortex-M3
+        floatingPointHardware: none
+        options:
+          version: 4
+          afterBuildTasks:
+            - name: "[Music] save bin to Objects"
+              abortAfterFailed: true
+              command: mkdir "${KEIL_OUTPUT_DIR}" & copy /Y "${OutDir}\Project.bin" "${KEIL_OUTPUT_DIR}\Music.bin"
+              disable: false
+          asm-compiler:
+            defines: []
+          beforeBuildTasks: []
+          c/cpp-compiler:
+            CXX_FLAGS: --diag_suppress=1 --diag_suppress=1295
+            C_FLAGS: --diag_suppress=1 --diag_suppress=1295
+            c99-mode: true
+            gnu-extensions: true
+            one-elf-section-per-function: true
+            optimization: level-0
+            warnings: all-warnings
+          global:
+            output-debug-info: enable
+            use-microLIB: true
+          linker:
+            misc-controls: --keep=*(MUS_HDR) --keep=*(MUS_ENT) --keep=*(MUS_NAME) --keep=*(MUS_NOTES)
+            output-format: elf
+            ro-base: "0x08000000"
+            rw-base: "0x20000000"
+            xo-base: ""
+        scatterFilePath: music.sct
+        storageLayout:
+          RAM:
+            - id: 1
+              isChecked: false
+              mem:
+                size: "0x0"
+                startAddr: "0x0"
+              noInit: false
+              tag: RAM
+          ROM:
+            - id: 1
+              isChecked: true
+              isStartup: false
+              mem:
+                size: "0x00200000"
+                startAddr: "0x08000000"
+              tag: IROM
+        useCustomScatterFile: true
     uploadConfigMap:
       JLink:
         baseAddr: ""

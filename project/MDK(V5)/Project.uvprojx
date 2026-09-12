@@ -902,7 +902,7 @@
             <v6Rtti>0</v6Rtti>
             <VariousControls>
               <MiscControls />
-              <Define>STM32F10X_MD,USE_STDPERIPH_DRIVER,VECT_TAB_OFFSET=0x3400</Define>
+              <Define>STM32F10X_MD,USE_STDPERIPH_DRIVER,VECT_TAB_OFFSET=0x3400,music</Define>
               <Undefine />
               <IncludePath>..\..\app;..\..\board;..\..\bootloader;..\..\bsp;..\..\shared;..\..\libraries\CMSIS\CM3\CoreSupport;..\..\libraries\CMSIS\CM3\DeviceSupport\ST\STM32F10x;..\..\libraries\STM32F10x_StdPeriph_Driver\inc;..\..\module</IncludePath>
             </VariousControls>
@@ -1029,6 +1029,36 @@
               <FilePath>..\..\module\esp_http_bridge.c</FilePath>
             </File>
             <File>
+              <FileName>esp_link.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\module\esp_link.c</FilePath>
+            </File>
+            <File>
+              <FileName>can_cluster.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\module\can_cluster.c</FilePath>
+            </File>
+            <File>
+              <FileName>music_data.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\module\music_data.c</FilePath>
+            </File>
+            <File>
+              <FileName>music_store.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\module\music_store.c</FilePath>
+            </File>
+            <File>
+              <FileName>music_ota.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\module\music_ota.c</FilePath>
+            </File>
+            <File>
+              <FileName>music_play.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\module\music_play.c</FilePath>
+            </File>
+            <File>
               <FileName>ota_upload.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\..\module\ota_upload.c</FilePath>
@@ -1132,6 +1162,11 @@
               <FileName>bsp_buzzer.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\..\bsp\bsp_buzzer.c</FilePath>
+            </File>
+            <File>
+              <FileName>bsp_can.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\..\bsp\bsp_can.c</FilePath>
             </File>
             <File>
               <FileName>bsp_cs1237.c</FileName>

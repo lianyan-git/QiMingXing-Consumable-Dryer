@@ -36,3 +36,10 @@ build_log.txt
 # ---- misc ----
 Thumbs.db
 Desktop.ini
+
+# ---- one-off dev helper scripts (?????) ----
+project/MDK(V5)/fix_*.py
+project/MDK(V5)/remove_curve.py
+
+# ---- stray build byproducts ----
+project/MDK(V5)/C

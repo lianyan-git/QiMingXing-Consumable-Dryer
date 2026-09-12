@@ -1,4 +1,4 @@
-﻿#ifndef BOOTLOADER_BUILD
+#ifndef BOOTLOADER_BUILD
 #include "bsp_stepper.h"
 #include "pin_config.h"
 #include "stm32f10x.h"
@@ -176,8 +176,7 @@ static void stepper_dir_set(uint8_t fwd)
 }
 
 static void stepper_timer_reload(void)
-{
-    uint32_t period = step_period_us;
+{    uint32_t period = step_period_us;
     if (period < 50) period = 50;      /* ?? 20k steps/s??????? */
     TIM_SetAutoreload(TIM2, period - 1U);
     TIM_SetCounter(TIM2, 0);
@@ -231,6 +230,10 @@ void Stepper_Init(void)
     tmc_initialized = 0;
 }
 
+void Stepper_Update(void);
+void Stepper_SyncProfile(void);
+void Stepper_SetSilent(uint8_t en);
+
 void Stepper_Enable(uint8_t enable)
 {
     stepper_enabled = enable;
@@ -242,6 +245,7 @@ void Stepper_Enable(uint8_t enable)
             if (tmc_set_current(g_sys.params.motor_current) == 0) tmc_initialized = 1;
             else tmc_initialized = 1;    /* UART????????VREF???? */
         }
+        if (tmc_initialized) Stepper_SetSilent(g_sys.params.motor_stealthchop);
     } else {
         GPIO_SetBits(PIN_STEP_EN_PORT, PIN_STEP_EN_PIN);
         TIM_Cmd(TIM2, DISABLE);
@@ -262,12 +266,52 @@ void Stepper_SetSpeed(uint16_t steps_per_sec)
     if (motor_running) stepper_timer_reload();
 }
 
+/* 一整圈 360° 对应步数：连续旋转专用常数（与摆动标定无关，见 bsp_stepper.h） */
+static uint32_t steps_per_rotation(void)
+{
+    return TRAY_STEPS_PER_360;
+}
+
+/* 从最新系统参数重建运动曲线：休息结束进入下一个转动周期时调用，
+ * 使转速/角度/次数/休息时长等修改在"下一次转动"生效（烘干中无需停止重启） */
+void Stepper_SyncProfile(void)
+{
+    work_limit = g_sys.params.motor_work_count;
+    rest_ms = (uint32_t)g_sys.params.motor_rest_sec * 1000U;
+    Stepper_SetSpeed((uint16_t)g_sys.params.motor_speed * 200U);
+
+    motor_osc_mode = g_sys.params.motor_oscillate;
+    if (motor_osc_mode) {
+        uint32_t t = (uint32_t)g_sys.params.motor_oscillate_angle * SWING_BASE_STEPS_PER_DEG
+                   * g_sys.params.motor_swing_cal / 10000U;
+        if (t < 1U) t = 1U;
+        target_steps = (int32_t)t;
+        work_unit_steps = t * 2U;          /* 一次往返 = 1 个工作单位 */
+    } else {
+        target_steps = 0;
+        work_unit_steps = steps_per_rotation();  /* 一次整圈 360° = 1 个"次数" */
+    }
+}
+
+/* TMC2208/2209 CHOPCONF(0x6C) bit30=1 → stealthChop 静音模式（读改写保留其它位） */
+void Stepper_SetSilent(uint8_t en)
+{
+    uint8_t is_tmc = (g_sys.params.motor_driver == MOTOR_DRIVER_TMC2208 ||
+                      g_sys.params.motor_driver == MOTOR_DRIVER_TMC2209);
+    if (!is_tmc) return;
+    uint32_t v = tmc_read_reg(0x6C);
+    if (v == 0xFFFFFFFFU) return;          /* UART 无应答：不盲写 */
+    if (en) v |= (1UL << 30);
+    else    v &= ~(1UL << 30);
+    tmc_write_reg(0x6C, v);
+}
+
 void Stepper_Move(int32_t steps)
 {
     if (!stepper_enabled) return;
-    target_steps = 0;                  /* ?????????????? */
+    target_steps = 0;                  /* 锟斤拷锟斤拷锟斤拷锟斤拷锟斤拷锟斤拷锟斤拷锟斤拷锟斤拷锟斤拷锟斤拷 */
     motor_osc_mode = 0;
-    work_unit_steps = 200;             /* 1 ????? = 1 ?(200?) */
+    work_unit_steps = steps_per_rotation();   /* 1 ??工作单?= 一整?(360° 标定步?)*/
     if (steps > 0) { last_dir = 1; stepper_dir_set(1); }
     else if (steps < 0) { last_dir = 0; stepper_dir_set(0); }
     stepper_start(steps);
@@ -299,6 +343,7 @@ void Stepper_Update(void)
             work_done = 0;
             steps_in_unit = 0;
             if (stepper_enabled) {
+                Stepper_SyncProfile();   /* 速度/角度/次数等修改在下一个转动周期生效 */
                 if (motor_osc_mode && target_steps > 0) {
                     osc_dir = 1;
                     stepper_dir_set(1);
@@ -389,5 +434,17 @@ uint8_t Stepper_TmcComOk(void)
 {
     uint32_t v = tmc_read_reg(0x02);
     return (v != 0xFFFFFFFFU) ? 1 : 0;
+}
+
+/* TMC 通讯详查（比单次应答更可靠）：连读 IFCNT(0x02) 两次。
+ * IFCNT 是芯片"已收到的有效报文计数"（4bit 循环）：真芯片第二次应答必然比第一次 +1；
+ * 共线拉高/干扰造成的假 0x05 应答无法模拟递增。判定在线时回报最新计数。 */
+uint8_t Stepper_TmcProbe(uint32_t *ifcnt)
+{
+    uint32_t a = tmc_read_reg(0x02);
+    uint32_t b = tmc_read_reg(0x02);
+    if (ifcnt) *ifcnt = b;
+    if (a == 0xFFFFFFFFU || b == 0xFFFFFFFFU) return 0;
+    return ((b & 0xFU) == ((a + 1U) & 0xFU)) ? 1U : 0U;
 }
 #endif /* BOOTLOADER_BUILD */
