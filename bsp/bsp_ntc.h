@@ -1,4 +1,4 @@
-#ifndef BSP_NTC_H
+﻿#ifndef BSP_NTC_H
 #define BSP_NTC_H
 
 #include <stdint.h>

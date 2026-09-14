@@ -1,4 +1,4 @@
-#ifndef BOOTLOADER_BUILD
+﻿#ifndef BOOTLOADER_BUILD
 /*
  * mod_wifi_manager.c
  * ESP01S WiFi Manager

@@ -1,12 +1,12 @@
-/*
+﻿/*
  * esp_link.c
- * App 运�时 ESP01S(�定义 AT 固件) 链路层（行协�）：
- *   STM32→ESP: "AT+WEBSTART" / "AT+CFGAP"(配网) / "AT+CFGCLR"(�5组存�) /
- *              "AT+WEBCLOSE"(其后 STM32 ��) / � '{' �头的 JSON �(�发给浏�器)
- *   ESP→STM32: "OK" / "+IP:x.x.x.x"(STA 已连) / "+AP"(进入配网AP) / "+DISC"(掉线) /
- *              � '{' �头的 JSON �(浏�器命令原文)
- * JSON 命令对应 web.txt 协�：HELLO/PRESET_GET|SAVE|DELETE|APPLY/PARAM_SET/RUN/
- *   GLOBAL/CAN_MODE；STM32 � ACK，并 1Hz 推� master+在线从机 DATA 行�按�� PRESET_LIST�
+ * App 杩愯屾椂 ESP01S(鑷瀹氫箟 AT 鍥轰欢) 閾捐矾灞傦紙琛屽崗璁锛夛細
+ *   STM32鈫扙SP: "AT+WEBSTART" / "AT+CFGAP"(閰嶇綉) / "AT+CFGCLR"(娓5缁勫瓨鍙) /
+ *              "AT+WEBCLOSE"(鍏跺悗 STM32 鏂鐢) / 浠 '{' 寮澶寸殑 JSON 琛(杞鍙戠粰娴忚堝櫒)
+ *   ESP鈫扴TM32: "OK" / "+IP:x.x.x.x"(STA 宸茶繛) / "+AP"(杩涘叆閰嶇綉AP) / "+DISC"(鎺夌嚎) /
+ *              浠 '{' 寮澶寸殑 JSON 琛(娴忚堝櫒鍛戒护鍘熸枃)
+ * JSON 鍛戒护瀵瑰簲 web.txt 鍗忚锛欻ELLO/PRESET_GET|SAVE|DELETE|APPLY/PARAM_SET/RUN/
+ *   GLOBAL/CAN_MODE锛汼TM32 鍥 ACK锛屽苟 1Hz 鎺ㄩ master+鍦ㄧ嚎浠庢満 DATA 琛屻佹寜闇鍥 PRESET_LIST銆
  */
 #ifndef BOOTLOADER_BUILD
 
@@ -17,6 +17,7 @@
 #include "can_cluster.h"
 #include "esp_link.h"
 #include "music_ota.h"
+#include "music_store.h"
 #include "stm32f10x.h"
 #include <string.h>
 #include <stdio.h>
@@ -31,18 +32,26 @@ extern void StopDrying(void);
 #define START_TMO_MS  9000U
 
 static EspLinkState_t s_state = ESPLINK_OFF;
-static uint8_t  s_pow_ms;              /* 上电稳定倒�时(×100ms) */
+static uint8_t  s_pow_ms;              /* 涓婄數绋冲畾鍊掕℃椂(脳100ms) */
 static uint32_t s_state_tick = 0;
 static uint32_t s_last_push = 0;
 static char     s_ip[16] = "";
 static char     s_line[LINK_BUF];
 static uint16_t s_li = 0;
-static uint8_t  s_pending_cfg = 0;     /* OK 前收到的配网请求 */
-static uint8_t  s_pending_clr = 0;     /* OK 前收到的重新配网请求 */
-static uint8_t  s_pending_music = 0;   /* OK 前收到的音乐上传 AP 请求 */
+static uint8_t  s_pending_cfg = 0;     /* OK 鍓嶆敹鍒扮殑閰嶇綉璇锋眰 */
+static uint8_t  s_pending_clr = 0;     /* OK 鍓嶆敹鍒扮殑閲嶆柊閰嶇綉璇锋眰 */
+static uint8_t  s_pending_music = 0;   /* OK 鍓嶆敹鍒扮殑闊充箰涓婁紶 AP 璇锋眰 */
 static uint8_t  s_closing = 0;
+static uint8_t  s_pow_on = 0;
 static uint32_t s_close_tick = 0;
-static char     s_out[896];            /* JSON 组包复用缓冲�12 预�最� ~850B� */
+static char     s_out[896];            /* JSON 缁勫寘澶嶇敤缂撳啿锛12 棰勮炬渶闀 ~850B锛 */
+
+/* push-if-changed: keep last pushed signature per device, only send DATA when changed */
+typedef struct {
+    int32_t a, b, c, d, e, f, g, h, i, j;
+} PushSig_t;
+static PushSig_t s_sig[CAN_SLAVE_MAX + 1];
+static uint8_t   s_sig_valid = 0;
 
 static void link_send(const char *s)
 {
@@ -52,11 +61,11 @@ static void link_send(const char *s)
 
 static void esp_power(uint8_t on)
 {
-    if (on) GPIO_ResetBits(PIN_ESP_EN_PORT, PIN_ESP_EN_PIN);   /* P-MOS：低=供电 */
+    if (on) GPIO_ResetBits(PIN_ESP_EN_PORT, PIN_ESP_EN_PIN);   /* P-MOS锛氫綆=渚涚數 */
     else    GPIO_SetBits(PIN_ESP_EN_PORT, PIN_ESP_EN_PIN);
 }
 
-/* ---------- � JSON 解析（格式由��代码生成/约定，键名不�特殊字�） ---------- */
+/* ---------- 灏 JSON 瑙ｆ瀽锛堟牸寮忕敱鏈绔浠ｇ爜鐢熸垚/绾﹀畾锛岄敭鍚嶄笉鍚鐗规畩瀛楃︼級 ---------- */
 static const char *jfind(const char *s, const char *key)
 {
     char pat[20];
@@ -80,7 +89,7 @@ static long jnum(const char *s, const char *key, long dflt)
     return strtol(p, NULL, 10);
 }
 
-static int jbool(const char *s, const char *key)    /* true/1 视为� */
+static int jbool(const char *s, const char *key)    /* true/1 瑙嗕负鐪 */
 {
     const char *p = jval(s, key);
     if (!p) return 0;
@@ -99,10 +108,10 @@ static int jstr(const char *s, const char *key, char *buf, uint16_t n)
     return (i != 0) ? 1 : 0;
 }
 
-/* 定位消息� "d": 之后的位�。网页� JSON � {"id":"RUN_169..","t":"RUN","d":{...}}�
- * 信封层也� "id" �—�直� jstr(line,"id") 会取到信� id 而非 d.id�
- * 导致 RUN/PARAM_SET 的目标��恒� "RUN_169.."（master 分支永不命中，启停烘干无效）�
- * d 内的��律从 droot(line) 起解析� */
+/* 瀹氫綅娑堟伅浣 "d": 涔嬪悗鐨勪綅缃銆傜綉椤电 JSON 涓 {"id":"RUN_169..","t":"RUN","d":{...}}锛
+ * 淇″皝灞備篃鏈 "id" 閿鈥斺旂洿鎺 jstr(line,"id") 浼氬彇鍒颁俊灏 id 鑰岄潪 d.id锛
+ * 瀵艰嚧 RUN/PARAM_SET 鐨勭洰鏍囪惧囨亽涓 "RUN_169.."锛坢aster 鍒嗘敮姘镐笉鍛戒腑锛屽惎鍋滅儤骞叉棤鏁堬級銆
+ * d 鍐呯殑閿涓寰嬩粠 droot(line) 璧疯В鏋愩 */
 static const char *droot(const char *s)
 {
     const char *p = strstr(s, "\"d\":");
@@ -118,7 +127,7 @@ static void send_ack(const char *line)
     }
 }
 
-/* ---------- 预�（主���部 flash，System_Save 落盘� ---------- */
+/* ---------- 棰勮撅紙涓昏惧囧栭儴 flash锛孲ystem_Save 钀界洏锛 ---------- */
 static int preset_find(const char *name)
 {
     uint8_t i;
@@ -144,7 +153,7 @@ static void preset_upsert(const char *name, long temp, long h, long m, long s)
     System_RequestSave();
 }
 
-/* PRESET_DELETE {remain:[{name,temp,h,m,s}...]} � � remain 重建列表 */
+/* PRESET_DELETE {remain:[{name,temp,h,m,s}...]} 鈫 浠 remain 閲嶅缓鍒楄〃 */
 static void preset_rebuild_from_remain(const char *line)
 {
     Preset_t tmp[PRESET_MAX];
@@ -180,7 +189,7 @@ static void preset_rebuild_from_remain(const char *line)
     }
 }
 
-/* 从机 h/m/s 分量�改：以集群内已收到的 dry_time_sec 为底重算 */
+/* 浠庢満 h/m/s 鍒嗛噺淇鏀癸細浠ラ泦缇ゅ唴宸叉敹鍒扮殑 dry_time_sec 涓哄簳閲嶇畻 */
 static uint32_t slave_time_apply(const char *id, const char *param, long v)
 {
     const CanSlave_t *sl;
@@ -201,7 +210,7 @@ static uint32_t slave_time_apply(const char *id, const char *param, long v)
     return s;
 }
 
-/* PARAM_SET 应用到指定�� */
+/* PARAM_SET 搴旂敤鍒版寚瀹氳惧 */
 static void apply_target(const char *id, const char *param, long v)
 {
     int slave = (id[0] == 's' && id[1] == 'l');
@@ -242,7 +251,7 @@ static int has_device(const char *line, const char *dev)
     return strstr(t, pat) != NULL;
 }
 
-/* ---------- PRESET_LIST 推� ---------- */
+/* ---------- PRESET_LIST 鎺ㄩ ---------- */
 static void send_preset_list(void)
 {
     uint16_t len;
@@ -265,12 +274,12 @@ static void send_preset_list(void)
     link_send(s_out);
 }
 
-/* ---------- 命令分发 ---------- */
+/* ---------- 鍛戒护鍒嗗彂 ---------- */
 static void send_devs(void)
 {
     int i;
     uint16_t len = 0;
-    /* 主机 + 在线从机列表：名�=设�+序列号，序列号即 About 页序列号(device_id) */
+    /* 涓绘満 + 鍦ㄧ嚎浠庢満鍒楄〃锛氬悕绉=璁惧+搴忓垪鍙凤紝搴忓垪鍙峰嵆 About 椤靛簭鍒楀彿(device_id) */
     len = (uint16_t)sprintf(s_out, "{\"t\":\"DEVS\",\"d\":{\"list\":[");
     len += (uint16_t)sprintf(s_out + len, "{\"id\":\"master\",\"sn\":\"%lu\"}",
                              (unsigned long)System_GetDeviceId());
@@ -337,7 +346,7 @@ static void web_cmd(const char *line)
                     CAN_Cluster_SendCtrl((uint8_t)i, CAN_CTRL_SET_TIME, (int32_t)sec);
             }
         }
-        g_sys.ui_force_redraw = 1;    /* 主机界面预�/时间立即刷新，不必�出页面再� */
+        g_sys.ui_force_redraw = 1;    /* 涓绘満鐣岄潰棰勮/鏃堕棿绔嬪嵆鍒锋柊锛屼笉蹇呴鍑洪〉闈㈠啀杩 */
         EspLink_PushNow(1);
     }
     else if (!strcmp(t, "PARAM_SET")) {
@@ -345,7 +354,7 @@ static void web_cmd(const char *line)
         jstr(d, "id", id, sizeof(id));
         jstr(d, "param", p, sizeof(p));
         apply_target(id, p, jnum(d, "value", -1));
-        EspLink_PushNow(1);           /* 参数变动立即回推同� */
+        EspLink_PushNow(1);           /* 鍙傛暟鍙樺姩绔嬪嵆鍥炴帹鍚屾 */
     }
     else if (!strcmp(t, "RUN")) {
         char id[12] = "master";
@@ -373,12 +382,12 @@ static void web_cmd(const char *line)
             g_sys.params.can_enabled = 0;
         }
         System_RequestSave();
-        g_sys.ui_force_redraw = 1;    /* CAN 设置页开关状态立即显� */
+        g_sys.ui_force_redraw = 1;    /* CAN 璁剧疆椤靛紑鍏崇姸鎬佺珛鍗虫樉绀 */
         EspLink_PushNow(1);
     }
 }
 
-/* ---------- DATA 推� ---------- */
+/* ---------- DATA 鎺ㄩ ---------- */
 static void push_dev(const char *id, int run, float temp, float humi,
                      long wt, float ptc, uint32_t sec, uint32_t rem, int has_target)
 {
@@ -399,6 +408,22 @@ static void push_dev(const char *id, int run, float temp, float humi,
     }
     link_send(s_out);
 }
+static void push_if_changed(uint8_t idx, const char *id, int8_t run,
+                            int16_t temp, int16_t humi, int16_t wt, int16_t ptc,
+                            int32_t sec, int32_t rem, uint8_t has_target)
+{
+    PushSig_t sg;
+    sg.a = temp; sg.b = humi; sg.c = wt; sg.d = ptc;
+    sg.e = sec;  sg.f = rem;  sg.g = run;
+    sg.h = has_target ? (int16_t)g_sys.params.target_temp : 0;
+    sg.i = has_target ? (int16_t)g_sys.params.ptc_max_temp : 0;
+    sg.j = has_target ? (int16_t)g_sys.params.can_enabled : 0;
+    if (s_sig_valid && memcmp(&s_sig[idx], &sg, sizeof(sg)) == 0) return;
+    s_sig[idx] = sg;
+    push_dev(id, run, (float)temp / 10.0f, (float)humi / 10.0f,
+             wt, (float)ptc / 10.0f, sec, rem, has_target);
+}
+
 
 void EspLink_PushNow(uint8_t force)
 {
@@ -407,19 +432,21 @@ void EspLink_PushNow(uint8_t force)
     int m_run;
     uint32_t m_rem;
     if (s_state != ESPLINK_ONLINE) return;
-    if (MusicOta_Active()) return;   /* 音乐上传接收期间不推 DATA，避免抢 UART */
+    if (MusicOta_Active()) return;
     if (!force && (int32_t)(now - s_last_push) < (int32_t)PUSH_MS) return;
     s_last_push = now;
-    /* run �反映"正在烘干"（加�/烘干/暂停）；rem：运行中=剩余，空�=设定时长�
-     * 保证非烘干状态下"剩余"�"烘干时长"显示�� */
+    /* push only when a field changed (no continuous beacon when idle).
+       rem changes every second while running -> pushed once per second then. */
     m_run = (g_sys.run_state == STATE_HEATING || g_sys.run_state == STATE_DRYING ||
              g_sys.run_state == STATE_PAUSED) ? 1 : 0;
     m_rem = m_run ? ((uint32_t)(g_sys.remaining_sec ? g_sys.remaining_sec : g_sys.params.dry_time_sec))
                   : (uint32_t)g_sys.params.dry_time_sec;
-    push_dev("master", m_run,
-             g_sys.current_temp, g_sys.current_humidity,
-             (long)g_sys.weight_g, g_sys.ptc_temp,
-             g_sys.params.dry_time_sec, m_rem, 1);
+    push_if_changed(0, "master", (int8_t)m_run,
+                    (int16_t)(g_sys.current_temp * 10.0f),
+                    (int16_t)(g_sys.current_humidity * 10.0f),
+                    (int16_t)g_sys.weight_g,
+                    (int16_t)(g_sys.ptc_temp * 10.0f),
+                    (int32_t)g_sys.params.dry_time_sec, (int32_t)m_rem, 1);
     for (i = 0; i < CAN_SLAVE_MAX; i++) {
         const CanSlave_t *sl = CAN_Cluster_GetSlave((uint8_t)i);
         char id[12];
@@ -431,14 +458,14 @@ void EspLink_PushNow(uint8_t force)
         s_rem = s_run ? ((uint32_t)(sl->remaining_sec ? sl->remaining_sec : sl->dry_time_sec))
                       : (uint32_t)sl->dry_time_sec;
         sprintf(id, "slave_%d", i + 1);
-        push_dev(id, s_run,
-                 (float)sl->air_temp_x10 / 10.0f, (float)sl->humidity_x10 / 10.0f,
-                 (long)sl->weight_g, (float)sl->ptc_temp_x10 / 10.0f,
-                 sl->dry_time_sec, s_rem, 0);
+        push_if_changed((uint8_t)(i + 1), id, (int8_t)s_run,
+                        (int16_t)sl->air_temp_x10, (int16_t)sl->humidity_x10,
+                        (int16_t)sl->weight_g, (int16_t)sl->ptc_temp_x10,
+                        (int32_t)sl->dry_time_sec, (int32_t)s_rem, 0);
     }
 }
 
-/* ---------- 接收行�理 ---------- */
+/* ---------- 鎺ユ敹琛屽勭悊 ---------- */
 static void link_rx_line(char *line)
 {
     size_t l = strlen(line);
@@ -451,6 +478,7 @@ static void link_rx_line(char *line)
             strncpy(g_sys.wifi_ip, s_ip, 15); g_sys.wifi_ip[15] = 0;
             g_sys.wifi_connected = 1; g_sys.wifi_ap_mode = 0;
             s_state = ESPLINK_ONLINE;
+            s_sig_valid = 0;          /* new session: push full on first tick */
             EspLink_PushNow(1);
         } else if (!strcmp(line, "+AP")) {
             g_sys.wifi_connected = 0; g_sys.wifi_ap_mode = 1;
@@ -460,13 +488,14 @@ static void link_rx_line(char *line)
             g_sys.wifi_connected = 0; s_ip[0] = 0;
             if (s_state == ESPLINK_ONLINE) s_state = ESPLINK_CONNECTING;
         } else if (!strcmp(line, "+MUSICAP")) {
-            /* 音乐上传 AP 已开�（AP，或已连 STA � APSTA� */
             g_sys.music_ota_active = 1;
-            g_sys.music_popup = 2;
+                        g_sys.music_popup = 2;
+            MusicStore_PrepareWipe();   /* upload session start: pre-erase old firmware area (header + old data sectors) so data write never stalls on erase */
         } else if (!strcmp(line, "+MUSICCLOSED")) {
             g_sys.music_ota_active = 0;
-            if (g_sys.music_popup == 2) g_sys.music_popup = 1;    /* 用户取消上传：回到待�� */
-            /* 音乐会话结束：若 WiFi �关仍�且非 CONFIG 配网�，恢复自动连� */
+            g_sys.wifi_ap_mode = 0;
+            if (g_sys.music_popup == 2) g_sys.music_popup = 1;    /* 鐢ㄦ埛鍙栨秷涓婁紶锛氬洖鍒板緟寮鍚 */
+            /* 闊充箰浼氳瘽缁撴潫锛氳嫢 WiFi 寮鍏充粛寮涓旈潪 CONFIG 閰嶇綉涓锛屾仮澶嶈嚜鍔ㄨ繛鎺 */
             if (g_sys.wifi_enabled && s_state != ESPLINK_CONNECTING) {
                 s_state = ESPLINK_CONNECTING;
                 s_state_tick = SystemTime_Millis();
@@ -474,11 +503,12 @@ static void link_rx_line(char *line)
             }
         } else if (!strcmp(line, "+MUSICOK")) {
             g_sys.music_ota_active = 0;
-            g_sys.music_popup = 0;    /* 完成后自动关弹窗 */
+            g_sys.wifi_ap_mode = 0;
+            g_sys.music_popup = 4;    /* 完成态：帧循环 1.8s 后自动收起 */    /* 瀹屾垚鍚庤嚜鍔ㄥ叧寮圭獥 */
             g_sys.ui_force_redraw = 1;
         } else if (!strcmp(line, "+MUSICERR")) {
             g_sys.music_ota_active = 0;
-            g_sys.music_popup = 5;    /* 失败 */
+            g_sys.music_popup = 5;    /* 澶辫触 */
         }
     } else if (line[0] == '{') {
         web_cmd(line);
@@ -492,7 +522,7 @@ static void link_rx_line(char *line)
             link_send("AT+MUSICAP");
             g_sys.music_popup = 2;
             g_sys.music_ota_active = 1;
-            s_state = ESPLINK_CONFIG;   /* 音乐上传 AP 会话：不再自� WEBSTART */
+            s_state = ESPLINK_CONFIG;   /* 闊充箰涓婁紶 AP 浼氳瘽锛氫笉鍐嶈嚜鍔 WEBSTART */
             s_ip[0] = 0;
             g_sys.wifi_ap_mode = 1;
         } else {
@@ -503,13 +533,13 @@ static void link_rx_line(char *line)
     }
 }
 
-/* ---------- 对� ---------- */
+/* ---------- 瀵瑰 ---------- */
 void EspLink_Init(void)
 {
     if (g_sys.wifi_enabled) {
-        EspUart_Init();          /* �� USART1 已初始化（App �径不再走 EspAt_Init� */
+        EspUart_Init();          /* 纭淇 USART1 宸插垵濮嬪寲锛圓pp 璺寰勪笉鍐嶈蛋 EspAt_Init锛 */
         esp_power(1);
-        s_pow_ms = 30;                     /* ~3s 供电稳定 */
+        s_pow_ms = 30; s_pow_on = 0;                     /* ~3s 渚涚數绋冲畾 */
         s_state_tick = SystemTime_Millis();
         s_state = ESPLINK_BOOT;
     }
@@ -526,6 +556,13 @@ void EspLink_Process(void)
         if ((uint32_t)(now - s_state_tick) < 100U) { return; }
         s_state_tick = now;
         if (--s_pow_ms) return;
+        if (s_pow_on) {   /* 断电 1s 稳定完成: 上电, 再进 3s 上电稳定倒计时 */
+            esp_power(1);
+            s_pow_on = 0;
+            s_pow_ms = 30;
+            s_state_tick = now;
+            return;
+        }
         EspUart_ClearRx();
         EspUart_SetEnabled(1);
         s_state = ESPLINK_BOOT;
@@ -552,16 +589,16 @@ void EspLink_Process(void)
         g_sys.wifi_connected = 0; g_sys.wifi_ap_mode = 0;
     }
 
-    /* 接收溢出恢�：内部 Flash 擦写期间 CPU � stall，单字节 RX 会溢出�致
-     * 行���。�测到溢出后丢弃当前残行并复位，避免卡在半� JSON 上� */
+    /* 鎺ユ敹婧㈠嚭鎭㈠嶏細鍐呴儴 Flash 鎿﹀啓鏈熼棿 CPU 琚 stall锛屽崟瀛楄妭 RX 浼氭孩鍑哄艰嚧
+     * 琛岃鎴鏂銆傛娴嬪埌婧㈠嚭鍚庝涪寮冨綋鍓嶆畫琛屽苟澶嶄綅锛岄伩鍏嶅崱鍦ㄥ崐涓 JSON 涓娿 */
     if (EspUart_HasOverflow()) {
         EspUart_ClearRx();
         s_li = 0;
     }
 
     while (EspUart_ReadByte(&b) != 0) {
-        /* 音乐 FSM 常驻�帧（空闲时只� 0xAA 帧头，不干扰行协�）；
-         * �旦握手成功（收流�）则�占字节，行协�暂停� */
+        /* 闊充箰 FSM 甯搁┗鎵甯э紙绌洪棽鏃跺彧鎵 0xAA 甯уご锛屼笉骞叉壈琛屽崗璁锛夛紱
+         * 涓鏃︽彙鎵嬫垚鍔燂紙鏀舵祦涓锛夊垯鐙鍗犲瓧鑺傦紝琛屽崗璁鏆傚仠銆 */
         MusicOta_FeedByte(b);
         if (MusicOta_Active()) continue;
         if (b == '\n') {
@@ -575,21 +612,21 @@ void EspLink_Process(void)
 
     if (!s_closing) EspLink_PushNow(0);
 
-    /* 音乐上传接收 FSM：需要时推进落盘与超时（� ACK 补发� */
-    MusicOta_Poll();   /* 音乐 FSM 常驻：空闲扫�/收流推进，均无副作用 */
+    /* 闊充箰涓婁紶鎺ユ敹 FSM锛氶渶瑕佹椂鎺ㄨ繘钀界洏涓庤秴鏃讹紙鍚 ACK 琛ュ彂锛 */
+    MusicOta_Poll();   /* 闊充箰 FSM 甯搁┗锛氱┖闂叉壂甯/鏀舵祦鎺ㄨ繘锛屽潎鏃犲壇浣滅敤 */
 }
 
 void EspLink_OnToggle(uint8_t on)
 {
     if (on) {
         if (s_state == ESPLINK_OFF) {
-            EspUart_Init();      /* App 首开 WiFi 时补� UART 初�化 */
+            EspUart_Init();      /* App 棣栧紑 WiFi 鏃惰ˉ榻 UART 鍒濆嬪寲 */
             esp_power(1);
             s_pow_ms = 30;
             s_state_tick = SystemTime_Millis();
             s_state = ESPLINK_BOOT;
         } else if (s_state == ESPLINK_BOOT) {
-            /* � OK 后自动发 */
+            /* 绛 OK 鍚庤嚜鍔ㄥ彂 */
         } else {
             s_state = ESPLINK_CONNECTING;
             s_state_tick = SystemTime_Millis();
@@ -614,23 +651,30 @@ void EspLink_StartConfig(void)
     else { link_send("AT+CFGCLR"); link_send("AT+CFGAP"); }
 }
 
-/* 音乐上传 AP：ESP 决定 AP 或（已连 STA 时）APSTA */
+/* 音乐上传 AP：强制冷启动 —— 先断电 1s 再上电, 3s 稳定后 BOOT→OK→MUSICAP。
+ * 避免 ESP 挂死/停留在其它模式时直接发 AT+MUSICAP 无响应、热点起不来。 */
 void EspLink_MusicOpenAp(void)
 {
-    if (s_state == ESPLINK_OFF) {          /* ESP �上电：先供电，OK 后发 MUSICAP */
-        esp_power(1);
-        s_pow_ms = 30;
-        s_state_tick = SystemTime_Millis();
-        s_state = ESPLINK_BOOT;
-        s_pending_music = 1;
-        g_sys.music_popup = 2;
-    } else if (s_state == ESPLINK_BOOT) {
-        s_pending_music = 1;
-        g_sys.music_popup = 2;
-    } else {
+    if (s_state == ESPLINK_ONLINE) {
+        /* WiFi 已在线: 直接发 MUSICAP 切 APSTA(AP+STA 共存), 不断 WiFi */
+        s_pending_music = 0;
         link_send("AT+MUSICAP");
         g_sys.music_popup = 2;
+        return;
     }
+    EspUart_Init();          /* ensure UART initialized even if WiFi was never toggled on this power cycle */
+    esp_power(0);
+    s_closing = 0;
+    s_pending_cfg = 0;
+    s_pending_clr = 0;
+    s_pending_music = 1;
+    s_pow_on = 1;
+    s_pow_ms = 10;           /* 断电 1s, 然后自动上电 +3s 稳定 */
+    s_state_tick = SystemTime_Millis();
+    s_state = ESPLINK_BOOT;
+    s_ip[0] = 0;
+    g_sys.music_ota_active = 0;
+    g_sys.music_popup = 2;
 }
 
 void EspLink_MusicCloseAp(void)
@@ -640,7 +684,7 @@ void EspLink_MusicCloseAp(void)
     g_sys.music_ota_active = 0;
 }
 
-/* 主机上���删改后，把�新��表推给网页（网� handleMsg 'PRESET_LIST' 实时刷新� */
+/* 涓绘満涓婇勮惧炲垹鏀瑰悗锛屾妸鏈鏂伴勮捐〃鎺ㄧ粰缃戦〉锛堢綉椤 handleMsg 'PRESET_LIST' 瀹炴椂鍒锋柊锛 */
 void EspLink_NotifyPresetsChanged(void)
 {
     send_preset_list();

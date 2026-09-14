@@ -1,4 +1,4 @@
-#include "bl_main.h"
+﻿#include "bl_main.h"
 #include "shared_defs.h"
 #include "flash_ops.h"
 #include "upgrade_flag.h"

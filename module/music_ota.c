@@ -1,4 +1,4 @@
-/*
+﻿/*
  * music_ota.c — 音乐固件 App 侧接收（0xAA 二进制帧 → MusicStore 外部 Flash）
  * 字节推进由 EspLink_Process 在“音乐接收态”喂入；Poll 推进落盘与超时。
  * 帧格式：
@@ -200,6 +200,9 @@ void MusicOta_FeedByte(uint8_t b)
             leave_active();
             ack(0); s_error = 1; s_st = S_IDLE; break;
         }
+        g_sys.music_upload_pct = 100;
+        g_sys.music_popup = 4;      /* 完成态：帧循环 1.8s 后自动收起 */
+        g_sys.ui_force_redraw = 1;
         ack(1);
         leave_active();
         s_error = 0;

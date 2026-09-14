@@ -1,4 +1,4 @@
-#ifndef PLATFORM_CONTRACT_H
+﻿#ifndef PLATFORM_CONTRACT_H
 #define PLATFORM_CONTRACT_H
 
 #include <stdint.h>

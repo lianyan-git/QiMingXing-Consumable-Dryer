@@ -1,5 +1,12 @@
-#ifndef BOOTLOADER_BUILD
+﻿#ifndef BOOTLOADER_BUILD
 #include "bsp_ntc.h"
+
+/* NTC 校准偏移（单位 0.1℃）：显示值 = 计算值 + 偏移。
+ * 实测比 SHT40 低约 2℃（NTC 的 B 值/R25/上拉阻值与假定值存在个体容差），
+ * 默认 +20 = +2.0℃；如用参考温度计校验后需微调改此值。
+ * 注意：该偏移同样作用于 PTC 过热保护阈值（85℃），修正后保护点更准确。 */
+#define NTC_CAL_OFFSET_10C  (0)   /* 偏移归零: 显示=原始换算 (如需校准按参考温度计调) */
+
 #include "pin_config.h"
 #include "stm32f10x.h"
 #include <math.h>
@@ -79,7 +86,7 @@ int16_t NTC_GetTemperature(void)
     if (filtered < -100.0f) filtered = tempC;   /* 首帧直通 */
     else filtered = filtered * 0.6f + tempC * 0.4f;
 
-    return (int16_t)(filtered * 10.0f);
+    return (int16_t)(filtered * 10.0f) + NTC_CAL_OFFSET_10C;
 }
 
 uint8_t NTC_IsOverTemp(void)

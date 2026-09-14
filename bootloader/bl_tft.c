@@ -1,4 +1,4 @@
-/*
+﻿/*
  * bl_tft.c
  * Bootloader TFT驱动 - 精简实现
  * 代码量控制在2KB以内

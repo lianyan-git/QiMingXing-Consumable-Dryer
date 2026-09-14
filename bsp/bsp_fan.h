@@ -1,4 +1,4 @@
-#ifndef __FAN_CONTROLLER_H
+﻿#ifndef __FAN_CONTROLLER_H
 #define __FAN_CONTROLLER_H
 
 #include <stdint.h>

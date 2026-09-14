@@ -1,4 +1,4 @@
-/*
+﻿/*
  * music_store.h — 音乐固件外部 Flash 存储与列表
  *
  * MUSIC 分区：0xC20000..0xE00000（1.875MB）。
@@ -37,5 +37,8 @@ uint16_t MusicStore_TrackCount(void);
 int      MusicStore_GetTrack(uint16_t idx, MusicTrackEntry_t *e);       /* 解析曲目表条目 */
 int      MusicStore_GetName(uint16_t idx, char *buf, uint16_t buflen);  /* 含2字节保底 */
 int      MusicStore_GetNote(uint16_t track, uint32_t k, uint16_t *freq, uint16_t *dur);
+
+void MusicStore_Wipe(void);   /* 擦除全局头扇区=清空音乐列表(长按音乐列表触发) */
+void MusicStore_PrepareWipe(void);  /* pre-erase old firmware area (header + old data sectors) at upload session start */
 
 #endif /* MUSIC_STORE_H */

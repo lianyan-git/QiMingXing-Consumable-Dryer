@@ -1,4 +1,4 @@
-/*
+﻿/*
  * littlefs_adapter.h
  * LittleFS适配层
  */

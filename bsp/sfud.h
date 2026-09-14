@@ -1,4 +1,4 @@
-/*
+﻿/*
  * This file is part of the Serial Flash Universal Driver Library.
  *
  * Copyright (c) 2016-2018, Armink, <armink.ztl@gmail.com>

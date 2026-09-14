@@ -1,4 +1,4 @@
-/*
+﻿/*
  * shared_defs.h
  * Bootloader和App共享的定义
  * 必须保持一致!

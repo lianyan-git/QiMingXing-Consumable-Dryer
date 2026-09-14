@@ -1,4 +1,4 @@
-#ifndef BOOTLOADER_BUILD
+﻿#ifndef BOOTLOADER_BUILD
 #include "bsp_ptc.h"
 #include "bsp_fan.h"
 #include "bsp_ntc.h"
@@ -23,6 +23,14 @@ void PTC_Init(void)
     GPIO_InitTypeDef g;
     RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA | RCC_APB2Periph_TIM1, ENABLE);
 
+    /* 上电保险: 先把 PA8 强制拉低(普通推挽), 避免复位/Bootloader 遗留的 TIM1 状态
+     * 在复用配置生效前输出高电平 → 上电随机加热 */
+    g.GPIO_Pin = PIN_PTC_PWM_PIN;
+    g.GPIO_Mode = GPIO_Mode_Out_PP;
+    g.GPIO_Speed = GPIO_Speed_2MHz;
+    GPIO_Init(PIN_PTC_PWM_PORT, &g);
+    GPIO_ResetBits(PIN_PTC_PWM_PORT, PIN_PTC_PWM_PIN);
+
     g.GPIO_Pin = PIN_PTC_PWM_PIN;
     g.GPIO_Mode = GPIO_Mode_AF_PP;
     g.GPIO_Speed = GPIO_Speed_50MHz;
@@ -42,10 +50,15 @@ void PTC_Init(void)
     o.TIM_Pulse = 0;
     o.TIM_OCPolarity = TIM_OCPolarity_High;
     TIM_OC1Init(PTC_PWM_TIM, &o);
-    TIM_OC1PreloadConfig(PTC_PWM_TIM, TIM_OCPreload_Enable);
-
+    /* 关闭 CH1 预装载: PTC_SetPower 写 CCR1 立即生效, 避免预装载下 CCR 延迟/不更新导致的
+     * "上电默认导通 / 停止烘干后仍加热不受控 / 烘干中功率乱跳" */
+    TIM_OC1PreloadConfig(PTC_PWM_TIM, TIM_OCPreload_Disable);
     TIM_CtrlPWMOutputs(PTC_PWM_TIM, ENABLE);
     TIM_Cmd(PTC_PWM_TIM, ENABLE);
+    TIM_SetCompare1(PTC_PWM_TIM, 0);                        /* 保险: CCR1 清零(关预装载后直接生效) */
+    TIM_GenerateEvent(PTC_PWM_TIM, TIM_EventSource_Update); /* 同步影子寄存器, 输出立即拉低 */
+    PTC_SetPower(0);                                        /* 上电默认关闭加热 */
+
 }
 
 void PTC_SetPower(uint8_t percent)

@@ -1,4 +1,4 @@
-#ifndef BOOTLOADER_BUILD
+﻿#ifndef BOOTLOADER_BUILD
 #include "bsp_stepper.h"
 #include "pin_config.h"
 #include "stm32f10x.h"

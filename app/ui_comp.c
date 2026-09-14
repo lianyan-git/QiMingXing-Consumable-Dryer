@@ -1,4 +1,4 @@
-#include "ui_comp.h"
+﻿#include "ui_comp.h"
 #include "bsp_tft_st7789.h"
 #include <string.h>
 

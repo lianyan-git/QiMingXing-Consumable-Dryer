@@ -1,4 +1,4 @@
-#ifndef BOOTLOADER_BUILD
+﻿#ifndef BOOTLOADER_BUILD
 #include "bsp_cs1237.h"
 #include "pin_config.h"
 #include "system_time.h"

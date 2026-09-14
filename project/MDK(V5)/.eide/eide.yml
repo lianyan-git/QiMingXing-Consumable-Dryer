@@ -95,12 +95,12 @@ virtualFolder:
         - path: ../../bsp/bsp_tft_st7789.c
         - path: ../../bsp/bsp_tft_port_stm32.c
         - path: ../../bsp/bsp_internal_flash_stm32.c
-        - path: ../../bsp/bsp_aht20.h
+        - path: ../../bsp/bsp_sht40.h
         - path: ../../bsp/bsp_buzzer.h
         - path: ../../bsp/bsp_can.h
         - path: ../../bsp/bsp_cs1237.h
-        - path: ../../bsp/bsp_aht20.c
-        - path: ../../bsp/bsp_aht20.h
+        - path: ../../bsp/bsp_sht40.c
+        - path: ../../bsp/bsp_sht40.h
         - path: ../../bsp/bsp_buzzer.c
         - path: ../../bsp/bsp_buzzer.h
         - path: ../../bsp/bsp_can.c
@@ -514,7 +514,7 @@ targets:
         - ../../module
       libList: []
     excludeList:
-      - <virtual_root>/BSP/bsp_aht20.c
+      - <virtual_root>/BSP/bsp_sht40.c
       - <virtual_root>/BSP/bsp_buzzer.c
       - <virtual_root>/BSP/bsp_can.c
       - <virtual_root>/BSP/bsp_cs1237.c

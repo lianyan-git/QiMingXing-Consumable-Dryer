@@ -1,4 +1,4 @@
-/*
+﻿/*
  * SFUD 平台移植：SPI1 与 TFT 共享，经 Spi1Bus 仲裁。
  * 每次 spi->wr 调用 = 一次完整 SPI1 总线事务（Acquire->Select->Transfer->Deselect->Release）。
  * W25Q128 的 WREN 与命令可分属两次 CS 会话（WEL 锁存保持），因此跨调用被 TFT 抢占也安全。

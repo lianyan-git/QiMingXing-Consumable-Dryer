@@ -1,4 +1,4 @@
-#ifndef BOOTLOADER_BUILD
+﻿#ifndef BOOTLOADER_BUILD
 /*
  * mod_ota.c
  * OTA upgrade manager

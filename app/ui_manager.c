@@ -1,8 +1,9 @@
 ﻿#ifndef BOOTLOADER_BUILD
 #include "ui_manager.h"
 #include "system_config.h"
+#include "bsp_encoder.h"
 #include "bsp_tft_st7789.h"
-#include "bsp_aht20.h"
+#include "bsp_sht40.h"
 #include "bsp_ntc.h"
 #include "bsp_fan.h"
 #include "bsp_rgb_led.h"
@@ -16,6 +17,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+
+extern void CAN_Cluster_RequestSearch(void);
 
 #define CARD_H         30
 #define CARD_GAP       4
@@ -523,7 +526,7 @@ void UI_ShowBootScreen(void)
         /* 30% 鏃惰讳紶鎰熷櫒 + 妫鏌 NTC 鏄�鍚﹂渶瑕佹暎鐑 */
         if (pct == 30) {
             float t, h;
-            if (AHT20_Read(&t, &h) == 0) {
+            if (SHT40_Read(&t, &h) == 0) {
                 g_sys.current_temp = t;
                 g_sys.current_humidity = h;
             }
@@ -555,7 +558,7 @@ void UI_ShowBootScreen(void)
                 }
                 if (w0 > -1000.0f) g_sys.weight_g = (int32_t)(w0 + ((w0 >= 0.0f) ? 0.5f : -0.5f));
             }
-            if (AHT20_Read(&t, &h) == 0) {
+            if (SHT40_Read(&t, &h) == 0) {
                 g_sys.current_temp = t;
                 g_sys.current_humidity = h;
             }
@@ -897,16 +900,13 @@ static void refresh_temp_adj_sel(uint8_t old_idx, uint8_t new_idx)
     }
 }
 
-static void draw_tune_live(void);   /* 鏍″噯椤靛疄鏃舵俯搴 AIR/PTC锛堝畾涔夊湪 1300 琛岄檮杩戯級 */
+static void draw_tune_live(uint8_t which);   /* 鏍″噯椤靛疄鏃舵俯搴 AIR/PTC锛堝畾涔夊湪 1300 琛岄檮杩戯級 */
 
 void UI_DrawTempPid(void)
 {
     char buf[32];
     TFT_FillScreen(UI_BG);
     draw_page_title_zh("温度PID", UI_WARN);
-    sprintf(buf, "温度 %d", g_sys.params.target_temp);
-    TFT_DrawStringZh((TFT_WIDTH - zh_str_width(buf)) / 2U, 24, buf, COLOR_ORANGE, UI_BG);
-    draw_degree(116, 24, COLOR_ORANGE, 2);
     if (g_sys.temp_pid_running) {
         TFT_DrawStringZh((TFT_WIDTH - zh_str_width("校准后单击返回")) / 2U, 46, "校准后单击返回", COLOR_YELLOW, UI_BG);
         TFT_FillRect(40, 66, 160, 2, COLOR_WHITE);
@@ -922,7 +922,7 @@ void UI_DrawTempPid(void)
         sprintf(buf, "KP:%.2f KI:%.2f KD:%.2f", g_sys.params.pid_air_kp, g_sys.params.pid_air_ki, g_sys.params.pid_air_kd);
         TFT_DrawString((TFT_WIDTH - (uint16_t)(strlen(buf) * 12U)) / 2U, 86, buf, COLOR_CYAN, UI_BG, 2);
     }
-    draw_tune_live();
+    draw_tune_live(3);
 }
 
 void UI_DrawTimeAdjust(void)
@@ -1061,7 +1061,7 @@ void UI_DrawPidAutotune(void)
         sprintf(buf, "KP:%.2f KI:%.2f KD:%.2f", g_sys.params.pid_ntc_kp, g_sys.params.pid_ntc_ki, g_sys.params.pid_ntc_kd);
         TFT_DrawString((TFT_WIDTH - (uint16_t)(strlen(buf) * 12U)) / 2U, 86, buf, COLOR_CYAN, UI_BG, 2);
     }
-    draw_tune_live();
+    draw_tune_live(3);
 }
 
 /* PID 璋冩暣椤垫暟鎹婧愶細浠 PTC 椤佃繘鍏(pid_return_screen=1)缂栬緫鍏冧欢 PID锛屼粠娓╁害椤佃繘鍏ョ紪杈戠┖姘 PID銆
@@ -1076,32 +1076,46 @@ static float *pid_row_val(uint8_t row)
 
 /* PID 璋冩暣椤碉細KP/KI/KD 涓変釜鍊肩洿鎺ユ樉绀猴紝鍗曞嚮閫変腑鍚庢棆杞鐩存帴鏀癸紙姝ヨ繘0.1+鍔犻燂級锛
  * 鍐嶅崟鍑婚鍑鸿ラ」骞跺悗鍙颁繚瀛橈紱绗4椤"返回"閫鍥炴潵婧愰〉銆 */
-void UI_DrawPidAdjust(void)
+static void pid_adj_draw_row(uint8_t i)
 {
     char buf[24];
-    uint8_t i;
-    TFT_FillScreen(UI_BG);
-    draw_page_title_zh("PID调整", COLOR_YELLOW);
-
-    for (i = 0; i < 3; i++) {
-        uint16_t y = (uint16_t)(42 + i * 18);
-        if (i == 0) sprintf(buf, "KP:%.1f", *pid_row_val(0));
-        else if (i == 1) sprintf(buf, "KI:%.1f", *pid_row_val(1));
-        else sprintf(buf, "KD:%.1f", *pid_row_val(2));
-        if (g_sys.selected_item == i || g_sys.pid_edit_active == (uint8_t)(i + 1)) {
-            TFT_FillRect(10, y, 130, 16, UI_ACCENT);
-            TFT_DrawStringZh(10, y, buf, UI_TEXT, UI_ACCENT);
-        } else {
-            TFT_DrawStringZh(10, y, buf, COLOR_CYAN, UI_BG);
-        }
+    uint16_t y = (uint16_t)(42 + (uint16_t)i * 18);
+    if (i == 0) sprintf(buf, "KP:%.1f", *pid_row_val(0));
+    else if (i == 1) sprintf(buf, "KI:%.1f", *pid_row_val(1));
+    else sprintf(buf, "KD:%.1f", *pid_row_val(2));
+    if (g_sys.selected_item == i || (i < 3U && g_sys.pid_edit_active == (uint8_t)(i + 1))) {
+        TFT_FillRect(10, y, 130, 16, UI_ACCENT);
+        TFT_DrawStringZh(10, y, buf, UI_TEXT, UI_ACCENT);
+    } else {
+        TFT_FillRect(10, y, 130, 16, UI_BG);
+        TFT_DrawStringZh(10, y, buf, COLOR_CYAN, UI_BG);
     }
-    /* 返回 */
+}
+
+static void pid_adj_draw_back(void)
+{
     if (g_sys.selected_item == 3) {
         TFT_FillRect(10, 96, 44, 16, UI_ACCENT);
         TFT_DrawStringZh(10, 96, "返回", UI_TEXT, UI_ACCENT);
     } else {
+        TFT_FillRect(10, 96, 44, 16, UI_BG);
         TFT_DrawStringZh(10, 96, "返回", UI_TEXT_DIM, UI_BG);
     }
+}
+
+static void pid_adj_draw_sel(uint8_t i)
+{
+    if (i < 3U) pid_adj_draw_row(i);
+    else pid_adj_draw_back();
+}
+
+void UI_DrawPidAdjust(void)
+{
+    uint8_t i;
+    TFT_FillScreen(UI_BG);
+    draw_page_title_zh("PID调整", COLOR_YELLOW);
+    for (i = 0; i < 3U; i++) pid_adj_draw_sel(i);
+    pid_adj_draw_back();
 }
 
 /* 棰勮�剧紪杈憫椤垫寚閽� */
@@ -1170,22 +1184,25 @@ static void preset_redraw_viewport(void)
 }
 
 /* 鑰楁潗棰勮句富鑿滃崟椤碉細缂栬緫棰勮�� / 鏂板缓棰勮�� / 鍒犻櫎棰勮�� / 閫�鍑� */
-void UI_DrawPresetMenu(void)
+static void preset_menu_draw_row(uint8_t i)
 {
     static const char *const kRows[4] = {"编辑预设", "新建预设", "删除预设", "退出"};
+    uint16_t y = (uint16_t)(36 + (uint16_t)i * 20);
+    if (g_sys.selected_item == i) {
+        fill_round_rect(8, y, 224, 18, UI_ACCENT, 7);
+        TFT_DrawStringZh(18, (uint16_t)(y + 1), kRows[i], UI_TEXT, UI_ACCENT);
+    } else {
+        TFT_FillRect(8, y, 224, 18, UI_BG);
+        TFT_DrawStringZh(18, (uint16_t)(y + 1), kRows[i], UI_TEXT_DIM, UI_BG);
+    }
+}
+
+void UI_DrawPresetMenu(void)
+{
     uint8_t i;
     TFT_FillScreen(UI_BG);
     draw_page_title_zh("烘干预设", UI_ACCENT);
-    for (i = 0; i < 4; i++) {
-        uint16_t y = (uint16_t)(36 + i * 20);
-        if (g_sys.selected_item == i) {
-            fill_round_rect(8, y, 224, 18, UI_ACCENT, 7);
-            TFT_DrawStringZh(18, (uint16_t)(y + 1), kRows[i], UI_TEXT, UI_ACCENT);
-        } else {
-            TFT_FillRect(8, y, 224, 18, UI_BG);
-            TFT_DrawStringZh(18, (uint16_t)(y + 1), kRows[i], UI_TEXT_DIM, UI_BG);
-        }
-    }
+    for (i = 0; i < 4; i++) preset_menu_draw_row(i);
 }
 
 /* 棰勮句簩绾у垪琛ㄩ〉锛坣ormal=缂栬緫/闀挎寜鍒囨崲锛沝el_mode=鍒犻櫎锛 */
@@ -1199,13 +1216,12 @@ void UI_DrawPreset(void)
 }
 
 /* 棰勮�剧紪杈憫椤碉紙鑼锛氬悕绉�/娓╁害/鏃堕棿/閫�鍑汉锛泃emp/time 鐢ㄥ脊绐楋紱鍚嶇О浠呮柊寤哄彲缂栬緫锛 */
-void UI_DrawPresetEdit(void)
+static void preset_edit_draw_rows(void)
 {
     char buf[24];
     uint16_t y;
     Preset_t *p = ui_preset_ptr();
-    TFT_FillScreen(UI_BG);
-    draw_page_title_zh("预设编辑", UI_ACCENT);
+    TFT_FillRect(0, 36, TFT_WIDTH, 86, UI_BG);
     y = 36;
     /* 琛屽厜鏍囷細閫変腑鐨勮屾暣琛岄珮浜 */
     if (g_sys.preset_row == 0) fill_round_rect(10, y, 220, 18, UI_ACCENT, 4);
@@ -1262,6 +1278,13 @@ void UI_DrawPresetEdit(void)
             TFT_DrawStringZh(10, by, "退出", UI_TEXT_DIM, UI_BG);
         }
     }
+}
+
+void UI_DrawPresetEdit(void)
+{
+    TFT_FillScreen(UI_BG);
+    draw_page_title_zh("预设编辑", UI_ACCENT);
+    preset_edit_draw_rows();
     if (g_sys.preset_confirm == 2) draw_confirm_popup("确定保存");
 }
 
@@ -1314,14 +1337,24 @@ static void draw_preset_popup(uint8_t kind)
 
 /* PID 鏍″噯椤靛疄鏃舵俯搴︼細AIR/PTC 鎺掑湪 y=108 琛岋紙涓ら〉甯冨眬宸茬粺涓锛涙棫鐗堟斁鍦 y=138 瓒呭嚭
  * 135px 鍙瑙佸尯鎵浠ョ湅涓嶈侊級锛0.1鈩 鍙樺寲鎵嶅眬閮ㄩ噸缁樸 */
-static void draw_tune_live(void)
+static void draw_tune_live(uint8_t which)
 {
     char buf[24];
-    TFT_FillRect(5, 106, 235, 13, UI_BG);
-    sprintf(buf, "AIR %.1f C", g_sys.current_temp);
-    TFT_DrawString(16, 108, buf, COLOR_CYAN, UI_BG, 1);
-    sprintf(buf, "PTC %.1f C", g_sys.ptc_temp);
-    TFT_DrawString(136, 108, buf, COLOR_GREEN, UI_BG, 1);
+    /* which: 1=AIR(左) 2=PTC(右) 3=两者；对称分布，仅刷新变化的一侧，避免整行闪烁 */
+    if (which & 1U) {
+        uint16_t w, x;
+        sprintf(buf, "AIR %.1f C", g_sys.current_temp);
+        w = (uint16_t)strlen(buf) * 6U; x = (uint16_t)(60U - w / 2U); if (x < 6U) x = 6U;
+        TFT_FillRect(4, 106, 112, 13, UI_BG);
+        TFT_DrawString(x, 108, buf, COLOR_CYAN, UI_BG, 1);
+    }
+    if (which & 2U) {
+        uint16_t w, x;
+        sprintf(buf, "PTC %.1f C", g_sys.ptc_temp);
+        w = (uint16_t)strlen(buf) * 6U; x = (uint16_t)(180U - w / 2U); if (x < 126U) x = 126U;
+        TFT_FillRect(124, 106, 112, 13, UI_BG);
+        TFT_DrawString(x, 108, buf, COLOR_GREEN, UI_BG, 1);
+    }
 }
 
 /* PID 鏍″噯椤佃繘搴︽潯灞閮ㄥ埛鏂帮紙涓ら〉鍚屽竷灞锛氭潯 y=68銆佺櫨鍒嗘瘮 y=86锛夛紝閬垮厤鏁村睆闂鐑 */
@@ -1388,15 +1421,22 @@ static void menu_redraw_viewport(void)
 void UI_MenuScroll(int dir)
 {
     int16_t target, max_off;
-    if (dir > 0) g_sys.selected_item = (uint8_t)((g_sys.selected_item + 1) % MENU_ITEM_COUNT);
-    else g_sys.selected_item = (g_sys.selected_item == 0) ? (uint8_t)(MENU_ITEM_COUNT - 1) : (uint8_t)(g_sys.selected_item - 1);
+    uint8_t old_sel = g_sys.selected_item;
+    uint8_t off_old = (uint8_t)(g_sys.pixel_offset / MENU_ROW_H2);
+    g_sys.selected_item = EncWrap(MENU_ITEM_COUNT, (int8_t)dir, g_sys.selected_item);
     target = (int16_t)g_sys.selected_item * MENU_ROW_H2;
     if (target < g_sys.pixel_offset) g_sys.pixel_offset = target;
     else if (target + MENU_ROW_H2 > g_sys.pixel_offset + MENU_VIEW_H) g_sys.pixel_offset = (int16_t)(target + MENU_ROW_H2 - MENU_VIEW_H);
     max_off = (int16_t)(MENU_ITEM_COUNT * MENU_ROW_H2 - MENU_VIEW_H);
     if (g_sys.pixel_offset < 0) g_sys.pixel_offset = 0;
     if (max_off > 0 && g_sys.pixel_offset > max_off) g_sys.pixel_offset = max_off;
-    menu_redraw_viewport();
+    /* Viewport shifted -> redraw whole viewport; else only old+new row (no full-area refresh flicker) */
+    if ((uint8_t)(g_sys.pixel_offset / MENU_ROW_H2) == off_old && old_sel != g_sys.selected_item) {
+        draw_menu_row(old_sel, 0);
+        draw_menu_row(g_sys.selected_item, 1);
+    } else {
+        menu_redraw_viewport();
+    }
 }
 
 void UI_DrawMenu(void)
@@ -1454,17 +1494,17 @@ static void motor_row_str(uint8_t i, char *buf)
     default: drv = "A4988"; break;
     }
     if (i >= count - 1) { sprintf(buf, "退出"); return; }
-    if (!is_tmc && slot >= 6) slot += 1;   /* A4988 无电流项 */
+    if (!is_tmc && slot >= 8) slot += 1;   /* A4988 无电流项: 跳过 slot 8 */
     switch (slot) {
     case 0: sprintf(buf, "联动:%s", g_sys.params.motor_enabled ? "开" : "关"); break;
     case 1: sprintf(buf, "方向:%s", g_sys.params.motor_direction ? "反转" : "正转"); break;
     case 2: sprintf(buf, "速度:%drpm", g_sys.params.motor_speed); break;
     case 3: sprintf(buf, "摆动:%s", g_sys.params.motor_oscillate ? "开" : "关"); break;
     case 4: sprintf(buf, "角度:%d°", g_sys.params.motor_oscillate_angle); break;
-    case 5: sprintf(buf, "驱动:%s", drv); break;
-    case 6: sprintf(buf, "电流:%.1fA", (float)g_sys.params.motor_current / 10.0f); break;
-    case 7: sprintf(buf, "次数:%d", g_sys.params.motor_work_count); break;
-    case 8: sprintf(buf, "休息:%ds", g_sys.params.motor_rest_sec); break;
+    case 5: sprintf(buf, "次数:%d", g_sys.params.motor_work_count); break;
+    case 6: sprintf(buf, "休息:%ds", g_sys.params.motor_rest_sec); break;
+    case 7: sprintf(buf, "驱动:%s", drv); break;
+    case 8: sprintf(buf, "电流:%.1fA", (float)g_sys.params.motor_current / 10.0f); break;
     case 9: sprintf(buf, "静音:%s", g_sys.params.motor_stealthchop ? "开" : "关"); break;
     default: buf[0] = 0; break;
     }
@@ -1522,7 +1562,7 @@ static void motor_draw_row(uint8_t i, uint16_t y, uint8_t selected)
                       g_sys.params.motor_driver == MOTOR_DRIVER_TMC2209);
     uint8_t count = is_tmc ? 11 : 9;
     uint8_t slot = i;
-    if (!is_tmc && slot >= 6) slot += 1;
+    if (!is_tmc && slot >= 8) slot += 1;   /* A4988 无电流项: 跳过 slot 8 */
     motor_row_str(i, buf);
     if (selected) TFT_FillRect(5, y, 220, 16, UI_ACCENT);
     else TFT_FillRect(5, y, 220, 16, UI_BG);
@@ -1571,15 +1611,24 @@ void UI_MotorScroll(int dir)
                       g_sys.params.motor_driver == MOTOR_DRIVER_TMC2209);
     uint8_t count = is_tmc ? 11 : 9;
     int16_t target, max_off;
-    if (dir > 0) g_sys.selected_item = (uint8_t)((g_sys.selected_item + 1) % count);
-    else g_sys.selected_item = (g_sys.selected_item == 0) ? (uint8_t)(count - 1) : (uint8_t)(g_sys.selected_item - 1);
+    uint8_t old_sel = g_sys.selected_item;
+    uint8_t off_old = (uint8_t)(g_sys.pixel_offset / SCR_ROW_H);
+    g_sys.selected_item = EncWrap(count, (int8_t)dir, g_sys.selected_item);
     target = (int16_t)g_sys.selected_item * SCR_ROW_H;
     if (target < g_sys.pixel_offset) g_sys.pixel_offset = target;
     else if (target + SCR_ROW_H > g_sys.pixel_offset + SCR_VIEW_H) g_sys.pixel_offset = (int16_t)(target + SCR_ROW_H - SCR_VIEW_H);
     max_off = (int16_t)(count * SCR_ROW_H - SCR_VIEW_H);
     if (g_sys.pixel_offset < 0) g_sys.pixel_offset = 0;
     if (max_off > 0 && g_sys.pixel_offset > max_off) g_sys.pixel_offset = max_off;
-    motor_redraw_viewport();
+    /* 视口未移位: 只重绘旧+新两行, 不整视区刷新不闪 */
+    if ((uint8_t)(g_sys.pixel_offset / SCR_ROW_H) == off_old && old_sel != g_sys.selected_item) {
+        int16_t y0 = (int16_t)(SCR_VIEW_Y - g_sys.pixel_offset + (int16_t)old_sel * SCR_ROW_H);
+        int16_t y1 = (int16_t)(SCR_VIEW_Y - g_sys.pixel_offset + (int16_t)g_sys.selected_item * SCR_ROW_H);
+        if (y0 >= (int16_t)SCR_VIEW_Y && y0 + SCR_ROW_H <= (int16_t)(SCR_VIEW_Y + SCR_VIEW_H)) motor_draw_row(old_sel, (uint16_t)y0, 0);
+        if (y1 >= (int16_t)SCR_VIEW_Y && y1 + SCR_ROW_H <= (int16_t)(SCR_VIEW_Y + SCR_VIEW_H)) motor_draw_row(g_sys.selected_item, (uint16_t)y1, 1);
+    } else {
+        motor_redraw_viewport();
+    }
 }
 
 void UI_DrawMotorAdjust(void)
@@ -1653,7 +1702,7 @@ static void wifi_draw_row(uint8_t i, uint16_t y, uint8_t selected)
     TFT_DrawStringZh(8, y + 1, labels[i],
                      (i == 0 && g_sys.wifi_enabled && !selected) ? COLOR_GREEN : UI_FG, bg);
     if (i == 0) {
-        draw_toggle(190, y + 2, g_sys.wifi_enabled);
+        draw_toggle(190, y + 1, g_sys.wifi_enabled);
         if (g_sys.wifi_enabled) {
             TFT_FillRect((uint16_t)(8 + lw + 6), y + 1, (uint16_t)(190 - 8 - lw - 8), 16, bg);
             switch (EspLink_State()) {
@@ -1743,10 +1792,12 @@ static void settings_draw_row(uint8_t i, uint16_t y)
 {
     static const char *kLabels[] = {"蜂鸣器联动","蜂鸣器音量","灯光开关","背光","主题","熄屏","RGB灯带","退出"};
     char buf[32];
-    TFT_DrawStringZh(10, y, kLabels[i], UI_TEXT_DIM, UI_BG);
+    TFT_FillRect(10, y, 95, 16, UI_BG);
     if (i == g_sys.selected_item) {
         TFT_FillRect(10, y, 95, 16, UI_ACCENT);
         TFT_DrawStringZh(10, y, kLabels[i], UI_TEXT, UI_ACCENT);
+    } else {
+        TFT_DrawStringZh(10, y, kLabels[i], UI_TEXT_DIM, UI_BG);
     }
     if (i < 6) {
         uint16_t vcol = (g_sys.settings_edit_active && i == g_sys.selected_item) ? COLOR_ORANGE : UI_ACCENT;
@@ -1797,7 +1848,7 @@ static void draw_rgb_bright_popup(void)
         TFT_FillRect((uint16_t)(px + RGB_ROW_X), ry, RGB_ROW_W, RGB_ROW_H, UI_CARD);
         TFT_DrawStringZh((uint16_t)(px + 16), (uint16_t)(py + (item == 0 ? 12 : 52)),
                          (item == 0) ? "指示灯" : "灯光",
-                         selected ? cc : UI_TEXT, UI_CARD);
+                         selected ? cc : UI_FG, UI_CARD);
         draw_rgb_bar(item);
         /* 杞寤撴渶鍚庣敾锛氱洊鍦ㄥ唴瀹逛箣涓婏紝涓嶄細鍐嶈鏁板/杩涘害鏉″悆鎺変竴鎴 */
         if (selected) draw_round_outline((uint16_t)(px + RGB_ROW_X), ry, RGB_ROW_W, RGB_ROW_H, cc, 6, 2);
@@ -1805,9 +1856,9 @@ static void draw_rgb_bright_popup(void)
     /* 完成 */
     if (sel == 2) {
         fill_round_rect((uint16_t)(px + 30), (uint16_t)(py + 96), 130, 22, COLOR_GREEN, 8);
-        TFT_DrawStringZh((uint16_t)(px + 30 + (130U - zh_str_width("完成")) / 2U), (uint16_t)(py + 100), "完成", UI_TEXT, COLOR_GREEN);
+        TFT_DrawStringZh((uint16_t)(px + 30 + (130U - zh_str_width("完成")) / 2U), (uint16_t)(py + 100), "完成", UI_FG, COLOR_GREEN);
     } else {
-        TFT_DrawStringZh((uint16_t)(px + 30 + (130U - zh_str_width("完成")) / 2U), (uint16_t)(py + 100), "完成", UI_TEXT_DIM, UI_CARD);
+        TFT_DrawStringZh((uint16_t)(px + 30 + (130U - zh_str_width("完成")) / 2U), (uint16_t)(py + 100), "完成", UI_FG_DIM, UI_CARD);
     }
 }
 
@@ -1830,9 +1881,9 @@ static void draw_rgb_bar(uint8_t item)
     sprintf(buf, "%d%%", val);
     if (editing) {
         fill_round_rect((uint16_t)(px + RGB_VAL_X), (uint16_t)(by - 2), RGB_VAL_W, 13, COLOR_ORANGE, 4);
-        TFT_DrawString((uint16_t)(px + RGB_VAL_X + 4), (uint16_t)(by - 1), buf, UI_TEXT, COLOR_ORANGE, 1);
+        TFT_DrawString((uint16_t)(px + RGB_VAL_X + 4), (uint16_t)(by - 1), buf, UI_FG, COLOR_ORANGE, 1);
     } else {
-        TFT_DrawString((uint16_t)(px + RGB_VAL_X + 4), (uint16_t)(by - 1), buf, selected ? cc : UI_TEXT, UI_CARD, 1);
+        TFT_DrawString((uint16_t)(px + RGB_VAL_X + 4), (uint16_t)(by - 1), buf, selected ? cc : UI_FG, UI_CARD, 1);
     }
 }
 
@@ -1868,15 +1919,24 @@ void UI_SettingsScroll(int dir)
 {
     uint8_t cnt = 8;
     int16_t target, max_off;
-    if (dir > 0) g_sys.selected_item = (uint8_t)((g_sys.selected_item + 1) % cnt);
-    else g_sys.selected_item = (g_sys.selected_item == 0) ? (uint8_t)(cnt - 1) : (uint8_t)(g_sys.selected_item - 1);
+    uint8_t old_sel = g_sys.selected_item;
+    uint8_t off_old = (uint8_t)(g_sys.pixel_offset / SCR_ROW_H);
+    g_sys.selected_item = EncWrap(cnt, (int8_t)dir, g_sys.selected_item);
     target = (int16_t)g_sys.selected_item * SCR_ROW_H;
     if (target < g_sys.pixel_offset) g_sys.pixel_offset = target;
     else if (target + SCR_ROW_H > g_sys.pixel_offset + SCR_VIEW_H) g_sys.pixel_offset = (int16_t)(target + SCR_ROW_H - SCR_VIEW_H);
     max_off = (int16_t)(cnt * SCR_ROW_H - SCR_VIEW_H);
     if (g_sys.pixel_offset < 0) g_sys.pixel_offset = 0;
     if (max_off > 0 && g_sys.pixel_offset > max_off) g_sys.pixel_offset = max_off;
-    settings_redraw_viewport();
+    /* Viewport shifted -> redraw whole viewport; else only old+new row (no full-area refresh flicker) */
+    if ((uint8_t)(g_sys.pixel_offset / SCR_ROW_H) == off_old && old_sel != g_sys.selected_item) {
+        int16_t y0 = (int16_t)(SCR_VIEW_Y - g_sys.pixel_offset + (int16_t)old_sel * SCR_ROW_H);
+        int16_t y1 = (int16_t)(SCR_VIEW_Y - g_sys.pixel_offset + (int16_t)g_sys.selected_item * SCR_ROW_H);
+        if (y0 >= (int16_t)SCR_VIEW_Y && y0 + SCR_ROW_H <= (int16_t)(SCR_VIEW_Y + SCR_VIEW_H)) settings_draw_row(old_sel, (uint16_t)y0);
+        if (y1 >= (int16_t)SCR_VIEW_Y && y1 + SCR_ROW_H <= (int16_t)(SCR_VIEW_Y + SCR_VIEW_H)) settings_draw_row(g_sys.selected_item, (uint16_t)y1);
+    } else {
+        settings_redraw_viewport();
+    }
 }
 
 /* 铚傞福鍣ㄩ煶閲�/灞忓箷浜搴 缂栬緫寮圭獥锛氳繘搴︽潯鍦ㄤ笂銆佸綋鍓嶅煎湪涓嬶紙瑕嗙洊浜庡綋鍓嶈彍鍗曚箣涓婏紝闈炴暣灞忥級 */
@@ -1897,6 +1957,26 @@ static void draw_settings_popup(uint8_t item)
     }
     if (item == 1) sprintf(buf, "%d%%", v * 10U);
     else sprintf(buf, "%d%%", v);
+    TFT_DrawString((TFT_WIDTH - (uint16_t)(strlen(buf) * 12U)) / 2U, (uint16_t)(py + 56), buf, UI_TEXT, UI_CARD, 2);
+}
+
+/* 音量/背光弹窗: 数值变化时只刷进度条+数字(卡片/边框不动, 防闪烁; 与 RGB 弹窗同策略) */
+static void settings_popup_bar(uint8_t item)
+{
+    uint16_t pw = 170, ph = 90;
+    uint16_t px = (TFT_WIDTH - pw) / 2;
+    uint16_t py = (TFT_HEIGHT - ph) / 2;
+    uint16_t m = (item == 1) ? 10U : 100U;
+    uint16_t v = (item == 1) ? g_sys.buzzer_vol : g_sys.backlight;
+    char buf[16];
+    TFT_FillRect((uint16_t)(px + 15), (uint16_t)(py + 30), (uint16_t)(pw - 30), 10, UI_CARD_EDGE);
+    {
+        uint16_t w = (uint16_t)((uint32_t)(pw - 30) * v / m);
+        if (w) TFT_FillRect((uint16_t)(px + 15), (uint16_t)(py + 30), w, 10, UI_ACCENT);
+    }
+    if (item == 1) sprintf(buf, "%d%%", v * 10U);
+    else sprintf(buf, "%d%%", v);
+    TFT_FillRect((uint16_t)(px + 15), (uint16_t)(py + 52), (uint16_t)(pw - 30), 20, UI_CARD);
     TFT_DrawString((TFT_WIDTH - (uint16_t)(strlen(buf) * 12U)) / 2U, (uint16_t)(py + 56), buf, UI_TEXT, UI_CARD, 2);
 }
 
@@ -1961,10 +2041,22 @@ static void can_row_str(uint8_t i, char *buf)
     switch (i) {
     case 0: sprintf(buf, "%s", g_sys.params.can_enabled ? "开" : "关"); break;
     case 1: sprintf(buf, "%s", g_sys.params.can_role ? "从机" : "主机"); break;
-    case 2: sprintf(buf, "%s", g_sys.params.can_role ? "仅主机" :
-                    (g_sys.can_search_tick ? "搜索中" : "搜索设备")); break;
+    case 2:
+        if (g_sys.params.can_role) buf[0] = 0;   /* 从机: 不显示 */
+        else {
+            switch (g_sys.can_search_state) {
+            case 1: sprintf(buf, "搜索中"); break;
+            case 2: sprintf(buf, "发现设备"); break;
+            case 3: sprintf(buf, "连接中"); break;
+            case 4: sprintf(buf, "连接成功"); break;
+            case 5: sprintf(buf, "未发现设备"); break;
+            case 6: sprintf(buf, "请重试"); break;
+            default: buf[0] = 0; break;          /* 空闲: 默认不显示 */
+            }
+        }
+        break;
     case 3:
-        if (g_sys.params.can_role) sprintf(buf, "%s", g_sys.can_joined ? "已入网" : "未接入");
+        if (g_sys.params.can_role) buf[0] = 0;   /* 从机: 不显示 */
         else sprintf(buf, "%d", (uint16_t)g_sys.can_connected);
         break;
     default: buf[0] = 0; break;
@@ -1972,14 +2064,30 @@ static void can_row_str(uint8_t i, char *buf)
 }
 
 /* CAN 椤靛崟琛岀粯鍒讹紙鏍囩+楂樹寒+鍊/寮鍏虫粦鍧楋級 */
+/* CAN 行可见性: 通讯关只显示开关+退出; 通讯开但从机只显示开关/主从/退出; 搜索/已连接仅主机 */
+static uint8_t can_row_visible(uint8_t i)
+{
+    if (i == 0 || i == 4) return 1;                 /* 通讯开关 + 退出 恒显示 */
+    if (!g_sys.params.can_enabled) return 0;        /* 通讯关: 主从/搜索/已连接隐藏 */
+    if (i == 1) return 1;                            /* 主从关系: 通讯开时显示 */
+    return (g_sys.params.can_role == 0);             /* 搜索设备/已连接设备: 仅主机 */
+}
+
 static void can_draw_row(uint8_t i, uint16_t y)
 {
     static const char *kLabels[] = {"CAN通讯", "主从关系", "搜索设备", "已连接设备", "退出"};
     char buf[32];
-    TFT_DrawStringZh(10, y, kLabels[i], UI_TEXT_DIM, UI_BG);
+    /* 通讯关/从机下隐藏对应行(整行清空) */
+    if (!can_row_visible(i)) {
+        TFT_FillRect(0, y, 233, SCR_ROW_H, UI_BG);
+        return;
+    }
+    TFT_FillRect(10, y, 95, 16, UI_BG);
     if (i == g_sys.selected_item) {
         TFT_FillRect(10, y, 95, 16, UI_ACCENT);
         TFT_DrawStringZh(10, y, kLabels[i], UI_TEXT, UI_ACCENT);
+    } else {
+        TFT_DrawStringZh(10, y, kLabels[i], UI_TEXT_DIM, UI_BG);
     }
     if (i < 4) {
         uint16_t vcol = (g_sys.can_edit_active && i == g_sys.selected_item) ? COLOR_ORANGE : UI_ACCENT;
@@ -2020,15 +2128,28 @@ static void can_redraw_viewport(void)
 void UI_CanScroll(int dir)
 {
     int16_t target, max_off;
-    if (dir > 0) g_sys.selected_item = (uint8_t)((g_sys.selected_item + 1) % CAN_ROW_COUNT);
-    else g_sys.selected_item = (g_sys.selected_item == 0) ? (uint8_t)(CAN_ROW_COUNT - 1) : (uint8_t)(g_sys.selected_item - 1);
+    uint8_t old_sel = g_sys.selected_item;
+    uint8_t off_old = (uint8_t)(g_sys.pixel_offset / SCR_ROW_H);
+    uint8_t guard = 0;
+    do {
+        g_sys.selected_item = EncWrap(CAN_ROW_COUNT, (int8_t)dir, g_sys.selected_item);
+        if (++guard > (uint8_t)CAN_ROW_COUNT) break;
+    } while (!can_row_visible(g_sys.selected_item));   /* 跳过隐藏行(通讯关/从机) */
     target = (int16_t)g_sys.selected_item * SCR_ROW_H;
     if (target < g_sys.pixel_offset) g_sys.pixel_offset = target;
     else if (target + SCR_ROW_H > g_sys.pixel_offset + SCR_VIEW_H) g_sys.pixel_offset = (int16_t)(target + SCR_ROW_H - SCR_VIEW_H);
     max_off = (int16_t)(CAN_ROW_COUNT * SCR_ROW_H - SCR_VIEW_H);
     if (g_sys.pixel_offset < 0) g_sys.pixel_offset = 0;
     if (max_off > 0 && g_sys.pixel_offset > max_off) g_sys.pixel_offset = max_off;
-    can_redraw_viewport();
+    /* 视口未移位: 只重绘旧+新两行, 不整视区刷新不闪 */
+    if ((uint8_t)(g_sys.pixel_offset / SCR_ROW_H) == off_old && old_sel != g_sys.selected_item) {
+        int16_t y0 = (int16_t)(SCR_VIEW_Y - g_sys.pixel_offset + (int16_t)old_sel * SCR_ROW_H);
+        int16_t y1 = (int16_t)(SCR_VIEW_Y - g_sys.pixel_offset + (int16_t)g_sys.selected_item * SCR_ROW_H);
+        if (y0 >= (int16_t)SCR_VIEW_Y && y0 + SCR_ROW_H <= (int16_t)(SCR_VIEW_Y + SCR_VIEW_H)) can_draw_row(old_sel, (uint16_t)y0);
+        if (y1 >= (int16_t)SCR_VIEW_Y && y1 + SCR_ROW_H <= (int16_t)(SCR_VIEW_Y + SCR_VIEW_H)) can_draw_row(g_sys.selected_item, (uint16_t)y1);
+    } else {
+        can_redraw_viewport();
+    }
 }
 
 /* ===================== 闊充箰椤 =====================
@@ -2058,15 +2179,24 @@ static void music_redraw_viewport(void)
 void UI_MusicScroll(int dir)
 {
     int16_t target, max_off;
-    if (dir > 0) g_sys.selected_item = (uint8_t)((g_sys.selected_item + 1) % MUSIC_ROW_COUNT);
-    else g_sys.selected_item = (g_sys.selected_item == 0) ? (uint8_t)(MUSIC_ROW_COUNT - 1) : (uint8_t)(g_sys.selected_item - 1);
+    uint8_t old_sel = g_sys.selected_item;
+    uint8_t off_old = (uint8_t)(g_sys.pixel_offset / SCR_ROW_H);
+    g_sys.selected_item = EncWrap(MUSIC_ROW_COUNT, (int8_t)dir, g_sys.selected_item);
     target = (int16_t)g_sys.selected_item * SCR_ROW_H;
     if (target < g_sys.pixel_offset) g_sys.pixel_offset = target;
     else if (target + SCR_ROW_H > g_sys.pixel_offset + SCR_VIEW_H) g_sys.pixel_offset = (int16_t)(target + SCR_ROW_H - SCR_VIEW_H);
     max_off = (int16_t)(MUSIC_ROW_COUNT * SCR_ROW_H - SCR_VIEW_H);
     if (g_sys.pixel_offset < 0) g_sys.pixel_offset = 0;
     if (max_off > 0 && g_sys.pixel_offset > max_off) g_sys.pixel_offset = max_off;
-    music_redraw_viewport();
+    /* 视口未移位: 只重绘旧+新两行 */
+    if ((uint8_t)(g_sys.pixel_offset / SCR_ROW_H) == off_old && old_sel != g_sys.selected_item) {
+        int16_t y0 = (int16_t)(SCR_VIEW_Y - g_sys.pixel_offset + (int16_t)old_sel * SCR_ROW_H);
+        int16_t y1 = (int16_t)(SCR_VIEW_Y - g_sys.pixel_offset + (int16_t)g_sys.selected_item * SCR_ROW_H);
+        if (y0 >= (int16_t)SCR_VIEW_Y && y0 + SCR_ROW_H <= (int16_t)(SCR_VIEW_Y + SCR_VIEW_H)) music_draw_row(old_sel, (uint16_t)y0, 0);
+        if (y1 >= (int16_t)SCR_VIEW_Y && y1 + SCR_ROW_H <= (int16_t)(SCR_VIEW_Y + SCR_VIEW_H)) music_draw_row(g_sys.selected_item, (uint16_t)y1, 1);
+    } else {
+        music_redraw_viewport();
+    }
 }
 
 void UI_DrawMusic(void)
@@ -2126,27 +2256,34 @@ static void music_list_draw_row(uint16_t i, uint16_t y, uint8_t selected)
     if (MusicPlay_IsPlaying() && MusicPlay_CurTrack() == i) {
         char p[8];
         sprintf(p, "%d%%", (int)MusicPlay_ProgressPct());
-        TFT_FillRect(172, (uint16_t)(y - 1), 60, 20, bg);
-        TFT_DrawString(178, (uint16_t)(y - 1), p, COLOR_CYAN, bg, 2);
+        TFT_FillRect(172, (uint16_t)y, 58, 18, bg);
+        TFT_DrawString(182, (uint16_t)(y + 5), p, COLOR_CYAN, bg, 1);
     }
 }
 
-/* 浠呭埛鏂版挱鏀捐岀殑鍙充晶杩涘害鍖猴紙閬垮厤鏁磋嗗彛閲嶇粯闂鐑 + 涓嶉噸璇 Flash 鏇插悕锛 */
+/* 只刷播放行右侧进度框(不整视区重绘, 不重读 Flash 曲名); 结束 2.5s 后清除 */
 static void music_list_refresh_progress(void)
 {
     uint16_t i = MusicPlay_CurTrack();
-    uint16_t so = (uint16_t)(g_sys.pixel_offset / 20);
-    uint16_t y;
+    uint16_t so, y;
     uint8_t selected;
     char p[8];
-    if (!MusicPlay_IsPlaying()) return;
-    if (i >= music_list_count()) return;
+    if (i >= music_list_count()) return;   /* 退出项等无对应曲行: 不画进度 */
+    so = (uint16_t)(g_sys.pixel_offset / 20);
     y = (uint16_t)(36 + ((int16_t)i - (int16_t)so) * 20);
     if (y < 36 || y + 18 > 36 + 100) return;
     selected = (i == g_sys.selected_item);
-    sprintf(p, "%d%%", (int)MusicPlay_ProgressPct());
-    TFT_FillRect(172, (uint16_t)(y - 1), 60, 20, selected ? UI_ACCENT : UI_BG);
-    TFT_DrawString(178, (uint16_t)(y - 1), p, COLOR_CYAN, selected ? UI_ACCENT : UI_BG, 2);
+    {
+        uint8_t playing = MusicPlay_IsPlaying();
+        uint32_t fin = MusicPlay_FinishMs();
+        if (playing || (fin != 0 && (uint32_t)(SystemTime_Millis() - fin) < 2500U)) {
+            sprintf(p, "%d%%", (int)MusicPlay_ProgressPct());
+            TFT_FillRect(172, y, 58, 18, selected ? UI_ACCENT : UI_BG);
+            TFT_DrawString(182, (uint16_t)(y + 5), p, COLOR_CYAN, selected ? UI_ACCENT : UI_BG, 1);
+        } else {
+            TFT_FillRect(172, y, 58, 18, selected ? UI_ACCENT : UI_BG);
+        }
+    }
 }
 
 static void music_list_redraw_viewport(void)
@@ -2167,15 +2304,25 @@ void UI_MusicListScroll(int dir)
 {
     uint16_t cnt = music_list_count();
     int16_t target, max_off;
-    if (dir > 0) g_sys.selected_item = (g_sys.selected_item + 1 >= cnt) ? 0 : (uint8_t)(g_sys.selected_item + 1);
-    else g_sys.selected_item = (g_sys.selected_item == 0) ? (uint8_t)(cnt - 1) : (uint8_t)(g_sys.selected_item - 1);
+    uint8_t old_sel = g_sys.selected_item;
+    uint8_t off_old = (uint8_t)(g_sys.pixel_offset / 20);
+    g_sys.selected_item = EncWrap(cnt, (int8_t)dir, g_sys.selected_item);
     target = (int16_t)g_sys.selected_item * 20;
     if (target < g_sys.pixel_offset) g_sys.pixel_offset = target;
     else if (target + 20 > g_sys.pixel_offset + 100) g_sys.pixel_offset = (int16_t)(target + 20 - 100);
     max_off = (int16_t)(cnt * 20 - 100);
     if (g_sys.pixel_offset < 0) g_sys.pixel_offset = 0;
     if (max_off > 0 && g_sys.pixel_offset > max_off) g_sys.pixel_offset = max_off;
-    music_list_redraw_viewport();
+    /* 视口未移位: 只重绘旧+新两行 */
+    if ((uint8_t)(g_sys.pixel_offset / 20) == off_old && old_sel != g_sys.selected_item) {
+        int16_t so = (int16_t)(g_sys.pixel_offset / 20);
+        int16_t y0 = (int16_t)(36 + ((int16_t)old_sel - so) * 20);
+        int16_t y1 = (int16_t)(36 + ((int16_t)g_sys.selected_item - so) * 20);
+        if (y0 >= 36 && y0 + 18 <= 136) music_list_draw_row(old_sel, (uint16_t)y0, 0);
+        if (y1 >= 36 && y1 + 18 <= 136) music_list_draw_row(g_sys.selected_item, (uint16_t)y1, 1);
+    } else {
+        music_list_redraw_viewport();
+    }
 }
 
 void UI_DrawMusicList(void)
@@ -2186,6 +2333,21 @@ void UI_DrawMusicList(void)
 }
 
 /* 涓婁紶闊充箰寮圭獥锛氭牴鎹涓嶅悓闃舵垫樉绀烘彁绀/杩涘害鏉 */
+/* 上传进度：只刷新进度条+数字（卡片在喷窗状态切换时已整张画过，避免整卡刷新闪烁） */
+static void music_popup_refresh_progress(void)
+{
+    uint16_t pw = 190;
+    uint16_t px = (TFT_WIDTH - pw) / 2;
+    uint16_t py = 12;
+    char buf[8];
+    uint8_t pct = g_sys.music_upload_pct;
+    fill_round_rect((uint16_t)(px + 25), (uint16_t)(py + 40), 140, 14, UI_BG, 7);
+    if (pct) fill_round_rect((uint16_t)(px + 26), (uint16_t)(py + 41), (uint16_t)(138U * pct / 100U), 12, COLOR_GREEN, 6);
+    TFT_FillRect((uint16_t)(px + 45), (uint16_t)(py + 60), (uint16_t)(pw - 90), 12, UI_CARD);
+    sprintf(buf, "%d%", (int)pct);
+    TFT_DrawString((TFT_WIDTH - (uint16_t)(strlen(buf) * 6U)) / 2U, (uint16_t)(py + 62), buf, UI_FG_DIM, UI_CARD, 1);
+}
+
 void UI_DrawMusicPopup(void)
 {
     uint16_t pw = 190, ph = 110;
@@ -2420,17 +2582,28 @@ void UI_Update(void)
                         break;
                     }
                     case SCREEN_PID_ADJUST:
-                        if (g_sys.selected_item != last_sel) { redraw = 1; last_sel = g_sys.selected_item; }
+                        if (g_sys.selected_item != last_sel) {
+                            uint8_t old = last_sel;
+                            last_sel = g_sys.selected_item;
+                            if (!redraw && old != 0xFF) {
+                                if (old <= 3U) pid_adj_draw_sel(old);
+                                if (g_sys.selected_item <= 3U) pid_adj_draw_sel(g_sys.selected_item);
+                            }
+                        }
                         /* 缂栬緫涓姣忓抚鍒锋柊褰撳墠琛岋紝鍊煎疄鏃舵洿鏂 */
                         if (!redraw && g_sys.pid_edit_active) {
                             refresh_pid_row((uint8_t)(g_sys.pid_edit_active - 1));
                         }
                         break;
-                    case SCREEN_PRESET: {          /* 主菜单：4 固定行，选中变化整页刷新 */
+                    case SCREEN_PRESET: {          /* 主菜单：4 固定行，光标移动只刷旧+新两行 */
                         static uint8_t last_msel = 0xFF;
                         if (g_sys.selected_item != last_msel) {
+                            uint8_t old = last_msel;
                             last_msel = g_sys.selected_item;
-                            redraw = 1;
+                            if (!redraw && old != 0xFF) {
+                                preset_menu_draw_row(old);
+                                preset_menu_draw_row(g_sys.selected_item);
+                            }
                         }
                         break;
                     }
@@ -2507,7 +2680,7 @@ void UI_Update(void)
                             /* 琛屽厜鏍囩Щ鍔锛氬悕绉/娓╁害/鏃堕棿/淇濆瓨/閫�鍑� 楂樹寒琛岄渶瀹炴椂閲嶇粯鏁撮〉 */
                             if (!redraw && g_sys.preset_row != last_prow) {
                                 last_prow = g_sys.preset_row;
-                                redraw = 1;
+                                preset_edit_draw_rows();
                             }
                             if (g_sys.preset_row_edit != last_pe) {
                                 last_pe = g_sys.preset_row_edit;
@@ -2515,13 +2688,13 @@ void UI_Update(void)
                                 last_name_cur = 0xFF; last_name[0] = 0;
                                 last_tv = 0xFF;
                                 { uint8_t k; for (k = 0; k < 6; k++) last_dig[k] = 0xFF; }
-                                redraw = 1;
+                                preset_edit_draw_rows();
                             }
                             if (!redraw && g_sys.preset_row_edit == 1) {   /* 名称：变化才重绘 */
                                 if (g_sys.preset_name_cur != last_name_cur || strcmp(p->name, last_name) != 0) {
                                     last_name_cur = g_sys.preset_name_cur;
                                     strcpy(last_name, p->name);
-                                    redraw = 1;
+                                    preset_edit_draw_rows();
                                 }
                             } else if (!redraw && g_sys.preset_row_edit == 2) {  /* 温度弹窗 */
                                 if (p->temp != last_tv) { last_tv = p->temp; draw_preset_popup(2); }
@@ -2541,7 +2714,10 @@ void UI_Update(void)
                         break;
                     }
                     case SCREEN_ABOUT:
-                        if (g_sys.selected_item != last_sel) { redraw = 1; last_sel = g_sys.selected_item; }
+                        if (g_sys.selected_item != last_sel) {
+                            last_sel = g_sys.selected_item;
+                            if (!redraw) draw_btn(184, "  退出", UI_TEXT_DIM, g_sys.selected_item == 0);
+                        }
                         break;
                     case SCREEN_TIME_ADJUST: {
                         static uint32_t last_dig_hash = 0;
@@ -2579,7 +2755,13 @@ void UI_Update(void)
                         break;
                     }
                     case SCREEN_PTC_EDIT:
-                        if (g_sys.selected_item != last_sel) { redraw = 1; last_sel = g_sys.selected_item; }
+                        if (g_sys.selected_item != last_sel) {
+                            last_sel = g_sys.selected_item;
+                            if (!redraw) {
+                                draw_btn(160, "  保存退出", COLOR_GREEN, g_sys.selected_item == 0);
+                                draw_btn(184, "  取消", UI_TEXT_DIM, g_sys.selected_item == 1);
+                            }
+                        }
                         if ((uint16_t)g_sys.params.ptc_max_temp != last_ptc_max) {
                             last_ptc_max = (uint16_t)g_sys.params.ptc_max_temp;
                             if (!redraw) {
@@ -2591,7 +2773,13 @@ void UI_Update(void)
                         }
                         break;
                     case SCREEN_PTC_COOLING_EDIT:
-                        if (g_sys.selected_item != last_sel) { redraw = 1; last_sel = g_sys.selected_item; }
+                        if (g_sys.selected_item != last_sel) {
+                            last_sel = g_sys.selected_item;
+                            if (!redraw) {
+                                draw_btn(160, "  保存退出", COLOR_GREEN, g_sys.selected_item == 0);
+                                draw_btn(184, "  取消", UI_TEXT_DIM, g_sys.selected_item == 1);
+                            }
+                        }
                         if ((uint16_t)g_sys.params.ptc_cooling_temp != last_ptc_cool) {
                             last_ptc_cool = (uint16_t)g_sys.params.ptc_cooling_temp;
                             if (!redraw) {
@@ -2604,7 +2792,14 @@ void UI_Update(void)
                         break;
                     case SCREEN_WIFI: {
                         static uint8_t last_wedit = 0xFF;
-                        if (g_sys.selected_item != last_sel) { redraw = 1; last_sel = g_sys.selected_item; }
+                        if (g_sys.selected_item != last_sel) {
+                            uint8_t old = last_sel;
+                            last_sel = g_sys.selected_item;
+                            if (!redraw && old != 0xFF && old < WIFI_ROWS && g_sys.selected_item < WIFI_ROWS) {
+                                wifi_draw_row(old, (uint16_t)(30 + (uint16_t)old * 26), 0);
+                                wifi_draw_row(g_sys.selected_item, (uint16_t)(30 + (uint16_t)g_sys.selected_item * 26), 1);
+                            }
+                        }
                         if (g_sys.wifi_enabled != last_wifi) { redraw = 1; last_wifi = g_sys.wifi_enabled; }
                         if (g_sys.wifi_edit_active != last_wedit) { redraw = 1; last_wedit = g_sys.wifi_edit_active; }
                         /* ESP 閾捐矾鐘舵/IP 鍙樺寲锛氬眬閮ㄩ噸缁樺紑鍏宠岋紙涓嶆暣灞忛棯锛 */
@@ -2634,10 +2829,7 @@ void UI_Update(void)
                         {
                             uint8_t air = (uint8_t)(g_sys.current_temp * 10.0f);
                             uint8_t ptc = (uint8_t)(g_sys.ptc_temp * 10.0f);
-                            if (air != last_air || ptc != last_ptc) {
-                                last_air = air; last_ptc = ptc;
-                                draw_tune_live();
-                            }
+                            { uint8_t ch = 0; if (air != last_air) { last_air = air; ch |= 1; } if (ptc != last_ptc) { last_ptc = ptc; ch |= 2; } if (ch) draw_tune_live(ch); }
                         }
                         break;
                     case SCREEN_PID_AUTOTUNE:
@@ -2651,10 +2843,7 @@ void UI_Update(void)
                         {
                             uint8_t air = (uint8_t)(g_sys.current_temp * 10.0f);
                             uint8_t ptc = (uint8_t)(g_sys.ptc_temp * 10.0f);
-                            if (air != last_air || ptc != last_ptc) {
-                                last_air = air; last_ptc = ptc;
-                                draw_tune_live();
-                            }
+                            { uint8_t ch = 0; if (air != last_air) { last_air = air; ch |= 1; } if (ptc != last_ptc) { last_ptc = ptc; ch |= 2; } if (ch) draw_tune_live(ch); }
                         }
                         break;
                     case SCREEN_SAFETY_ALERT:
@@ -2708,7 +2897,8 @@ void UI_Update(void)
                             if (pop != last_pop_item) {
                                 if (last_pop_item != 0xFF && pop == 0xFF) redraw = 1;
                                 last_pop_item = pop;
-                                last_pop_val[0] = 0;   /* 打开弹窗强制首绘 */
+                                last_pop_val[0] = 0;
+                                if (pop != 0xFF) draw_settings_popup(pop);   /* 打开: 整卡绘制一次 */
                             }
                             if (!redraw && pop != 0xFF) {
                                 char pv[16];
@@ -2716,7 +2906,7 @@ void UI_Update(void)
                                 sprintf(pv, "%d", pvv);
                                 if (strcmp(pv, last_pop_val) != 0) {
                                     strcpy(last_pop_val, pv);
-                                    draw_settings_popup(pop);
+                                    settings_popup_bar(pop);   /* 值变: 只刷进度条+数字, 卡片不闪 */
                                 }
                             }
                         }
@@ -2726,6 +2916,7 @@ void UI_Update(void)
                         static uint8_t last_cn = 0xFF;
                         static uint8_t last_jn = 0xFF;
                         static char last_cr[24] = "";
+                        static uint8_t last_cs = 0xFF;
                         /* 宸茶繛鎺ユ暟 / 鍏ョ綉鐘舵 瀹炴椂鍒锋柊 */
                         if (g_sys.can_connected != last_cn || g_sys.can_joined != last_jn) {
                             last_cn = g_sys.can_connected;
@@ -2733,9 +2924,42 @@ void UI_Update(void)
                             refresh_can_row(3);
                         }
                         /* 鎼滅储鎻愮ず甯э細閫掑噺鍚庢竻闄 */
-                        if (g_sys.can_search_tick) {
-                            g_sys.can_search_tick--;
-                            if (g_sys.can_search_tick == 0) refresh_can_row(2);
+                        /* 搜索设备状态机: 状态变化立即刷行2; 搜索中每500ms广播; 命中/超时推进 */
+                        if (g_sys.can_search_state != last_cs) {
+                            last_cs = g_sys.can_search_state;
+                            refresh_can_row(2);
+                        }
+                        if (g_sys.can_search_state) {
+                            uint32_t now2 = SystemTime_Millis();
+                            uint32_t dt = (uint32_t)(now2 - g_sys.can_search_t0);
+                            switch (g_sys.can_search_state) {
+                            case 1:   /* 搜索中 */
+                                if ((uint32_t)(now2 - g_sys.can_search_last) >= 500U) {
+                                    g_sys.can_search_last = now2;
+                                    CAN_Cluster_RequestSearch();
+                                }
+                                if (g_sys.can_connected > g_sys.can_search_cnt0) { g_sys.can_search_state = 2; g_sys.can_search_t0 = now2; }
+                                else if (dt >= 4000U) { g_sys.can_search_state = 5; g_sys.can_search_t0 = now2; }
+                                break;
+                            case 2:   /* 发现设备 */
+                                if (dt >= 800U) { g_sys.can_search_state = 3; g_sys.can_search_t0 = now2; }
+                                break;
+                            case 3:   /* 连接中 */
+                                if (dt >= 2000U) { g_sys.can_search_state = 4; g_sys.can_search_t0 = now2; }
+                                break;
+                            case 4:   /* 连接成功: 2s 后消失 */
+                                if (dt >= 2000U) { g_sys.can_search_state = 0; }
+                                break;
+                            case 5:   /* 未发现设备 */
+                                if (dt >= 800U) { g_sys.can_search_state = 6; g_sys.can_search_t0 = now2; }
+                                break;
+                            case 6:   /* 请重试: 2s 后消失 */
+                                if (dt >= 2000U) { g_sys.can_search_state = 0; }
+                                break;
+                            default:
+                                g_sys.can_search_state = 0;
+                                break;
+                            }
                         }
                         /* 缂栬緫涓鍊煎彉鍖栧疄鏃跺埛鏂板綋鍓嶈 */
                         if (g_sys.can_edit_active) {
@@ -2756,13 +2980,14 @@ void UI_Update(void)
                         if (g_sys.music_popup != last_mup) {
                             last_mup = g_sys.music_popup;
                             redraw = 1;
+                            if (g_sys.music_popup == 4 || g_sys.music_popup == 5) last_ms = nowm;
                         }
                         if (g_sys.music_popup == 3 && (uint32_t)(nowm - last_ms) >= 100) {
                             last_ms = nowm;
-                            UI_DrawMusicPopup();
+                            music_popup_refresh_progress();
                         }
                         if ((g_sys.music_popup == 4 || g_sys.music_popup == 5) &&
-                            (uint32_t)(nowm - last_ms) >= 1800 && last_ms != 0) {
+                            (uint32_t)(nowm - last_ms) >= 1800) {
                             g_sys.music_popup = 0;
                             redraw = 1;
                         }
@@ -2774,7 +2999,7 @@ void UI_Update(void)
                         uint32_t nowm = SystemTime_Millis();
                         if ((uint32_t)(nowm - last_ml) >= 150) {
                             last_ml = nowm;
-                            if (MusicPlay_IsPlaying()) music_list_refresh_progress();
+                            music_list_refresh_progress();
                             if (music_list_top_long()) {
                                 g_sys.music_marquee += 2;
                                 /* 浠呴噸缁橀暱鍚嶉変腑琛 */

@@ -1,4 +1,4 @@
-#ifndef __SYSTEM_CONFIG_H
+﻿#ifndef __SYSTEM_CONFIG_H
 #define __SYSTEM_CONFIG_H
 
 #include "shared_defs.h"
@@ -216,7 +216,11 @@ typedef struct {
     uint8_t can_connected;    /* CAN 已连接从机数(主机视角，实时) */
     uint8_t can_joined;       /* CAN 从机是否已接入主机网络(从机视角) */
     uint8_t can_edit_active;  /* CAN 页编辑态: 0=选行 1=编辑 */
-    uint8_t can_search_tick;  /* CAN 搜索提示帧计数 0=无 */
+    uint8_t can_search_tick;  /* CAN 搜索提示帧计数 0=无 (旧字段, 不再使用) */
+    uint8_t can_search_state; /* CAN 搜索状态机: 0=空闲 1=搜索中 2=发现设备 3=连接中 4=连接成功 5=未发现设备 6=请重试 */
+    uint8_t can_search_cnt0;  /* 搜索开始时的已连接数(命中检测用) */
+    uint32_t can_search_t0;   /* 状态进入时间(ms) */
+    uint32_t can_search_last; /* 搜索中最近一次广播时间(ms) */
     uint8_t wifi_edit_active; /* WiFi开关编辑态: 0=选行 1=选中待确认(再单击退出才生效) */
     uint8_t wifi_edit_orig;   /* 进入WiFi开关编辑态时的原状态，退出时比较决定是否切换ESP */
     uint8_t ui_force_redraw;  /* 外部(网页命令等)请求整屏重绘的标志，UI_Update 消费后清零 */

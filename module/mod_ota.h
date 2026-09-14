@@ -1,4 +1,4 @@
-/*
+﻿/*
  * ota_manager.h
  * OTA升级管理
  */

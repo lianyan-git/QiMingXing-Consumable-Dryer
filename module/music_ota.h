@@ -1,4 +1,4 @@
-/*
+﻿/*
  * music_ota.h — 音乐固件 App 侧接收（ESP → UART 0xAA 帧 → 外部 Flash）
  *
  * 帧格式（与 bootloader 固件 OTA 兼容，但入口字节区分音乐）：

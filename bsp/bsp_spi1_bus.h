@@ -1,4 +1,4 @@
-#ifndef BSP_SPI1_BUS_H
+﻿#ifndef BSP_SPI1_BUS_H
 #define BSP_SPI1_BUS_H
 
 #include <stdint.h>

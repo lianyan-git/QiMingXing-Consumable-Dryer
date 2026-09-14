@@ -1,4 +1,4 @@
-/*
+﻿/*
  * bsp_can.h
  * CAN 总线驱动 (bxCAN1, PB8=RX / PB9=TX)
  * 注：函数加 BspCan_ 前缀，避免与 StdPeriph 库 CAN_Init/CAN_DeInit 重名。

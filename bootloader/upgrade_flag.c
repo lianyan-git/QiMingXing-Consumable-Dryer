@@ -1,4 +1,4 @@
-/*
+﻿/*
  * upgrade_flag.c
  * 升级标志管理实现
  * 双份保存策略：内部Flash + 外部Flash

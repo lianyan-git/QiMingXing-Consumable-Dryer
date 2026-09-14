@@ -1,4 +1,4 @@
-#ifndef __UI_COMP_H__
+﻿#ifndef __UI_COMP_H__
 #define __UI_COMP_H__
 
 #include <stdint.h>

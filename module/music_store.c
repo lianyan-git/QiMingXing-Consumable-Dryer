@@ -1,9 +1,9 @@
-/*
- * music_store.c ?? ?Ÿ³ä¹å›ºä»¶å?–é?? Flash å­˜å?¨ä?Žå?—è¡ï????žé˜»?ÞÍ??
- * ????Œºï¼šMUSIC_FLASH_BASE=0xC20000??
- *   [????Œº0 4KB] ??¨å??å¤ {magic,version,size,crc32,checksum}
- *   [0xC21000..] ?•´??? .mubï¼??•°?åŒºï¼Œçº¿æ§??™ï?Œæ?‰æ???Œº??‰é???“¦ï¼?
- * ?‰æ?‰æ“¦/??™ç?? SysFlashOp ä¸Žå???•°ä¿å?/?›²çº¿æ?’ä?–ã?
+ï»¿/*
+ * music_store.c ?? ?ç…¶ä¹å›ºä»¶ï¿½?æ ­?? Flash å­˜ï¿½?ã„¤?åº¡?æ¥„â˜…????ç‚ºæ¨†?å°¥??
+ * ????å°¯ï¼šMUSIC_FLASH_BASE=0xC20000??
+ *   [????å°¯0 4KB] ??ã„¥??æ¾¶ {magic,version,size,crc32,checksum}
+ *   [0xC21000..] ?æš£??? .mubé”›??æšŸ?å¶…å°¯ï¼Œçº¿å¦²??æ¬™?å±¾?å¤‹???å°¯??å¤???æ‘é”›?
+ * ?å¤‹?å¤‹æ‘/??æ¬‘?? SysFlashOp ä¸Žï¿½???æšŸä¿ï¿½?/?æ´¸çº¿ï¿½?æŽ?æ ¥?
  */
 #include "music_store.h"
 #include "music_format.h"
@@ -18,24 +18,24 @@
 #define MUSIC_ERASE_TMO    4000U
 #define MUSIC_PAGE_TMO     1500U
 
-/* MUB ???ä»¶å¤´?›ºå® 0x24ï¼36Bï¼‰ï?šmagic4+version4+track_count2+flags2+file_size4+crc4+name_off4+name_size4+track_off4+reserved4 */
+/* MUB ???ä»¶å¤´?æµç€¹ 0x24é”›36Bï¼‰ï¿½?æ­®agic4+version4+track_count2+flags2+file_size4+crc4+name_off4+name_size4+track_off4+reserved4 */
 #define MUB_HDR_SIZE       0x24U
 #define MUB_TRACK_ENTRY    16U
 
 typedef struct {
     uint32_t magic;      /* 'MUS1' */
     uint32_t version;
-    uint32_t size;       /* .mub å­—è???? */
-    uint32_t crc32;      /* ??¨æ??ä» CRC32ï¼????ç»?å¼ï¼? */
-    uint32_t checksum;   /* magic^version^size^crc32 ?????ç? */
+    uint32_t size;       /* .mub å­—ï¿½???? */
+    uint32_t crc32;      /* ??ã„¦??æµ  CRC32é”›????ç¼?å¯®é”›? */
+    uint32_t checksum;   /* magic^version^size^crc32 ?????å¶‡? */
 } MusicGlobalHdr_t;
 
 static uint8_t  s_init    = 0;
 static uint8_t  s_has_fw  = 0;
 static uint32_t s_file_size = 0;
 
-/* ä¸Šä?? FSMï¼ˆstï¼‰ï??0=ç©ºé—² 1=?“¦ç­‰å? 2=??‘å?™é? 3=é¡µå?™ç?‰å??
- *                4=å¤´æ“¦ç­‰å?? 5=å¤´å?™ç?‰å??ï¼ˆFinish ??Žè?›å?¥ï?? */
+/* ä¸Šï¿½?? FSMï¼ˆstï¼‰ï¿½??0=ç©ºé—² 1=?æ‘ç­‰ï¿½? 2=??æˆ?æ¬“? 3=é¡µï¿½?æ¬‘?å¤Š??
+ *                4=å¤´æ“¦ç­‰ï¿½?? 5=å¤´ï¿½?æ¬‘?å¤Š??ï¼ˆFinish ??åº¤?æ¶˜?ãƒ¯?? */
 static uint8_t  s_st        = 0;
 static uint8_t  s_page[256];
 static uint16_t s_page_len  = 0;
@@ -44,6 +44,11 @@ static uint32_t s_up_total  = 0;
 static uint8_t  s_erased_sect = 0xFF;  /* last erased data sector index (data-internal), 0xFF=none */
 static uint32_t s_st_t0     = 0;
 static uint32_t s_up_crc    = 0xFFFFFFFFUL;
+
+/* pre-erase at session start: header + old data sectors, so data write never stalls on erase */
+static uint8_t  s_pre_active = 0;
+static uint8_t  s_pre_total  = 0;
+static uint8_t  s_pre_cur    = 0;
 
 static uint32_t g_hdr_chk(const MusicGlobalHdr_t *h)
 {
@@ -63,7 +68,7 @@ static uint32_t crc_byte(uint32_t crc, uint8_t b)
     return crc;
 }
 
-/* ??Œæ¥ç?? WIP æ¸??›¶ï¼???­ä?‹åŠ¡ï¼256Bé¡µå?™æ?4KB????Œº?“¦ï¼?1~2så°?é¡¶ï? */
+/* ??å±¾ãƒ§?? WIP å¨“??æµ‚é”›???ï¿½ï¿½?å¬ªå§Ÿé”›256Bé¡µï¿½?æ¬?4KB????å°¯?æ‘é”›?1~2sç?é¡¶ï¿½? */
 static int flash_wait_idle(void)
 {
     uint8_t sr1;
@@ -74,7 +79,7 @@ static int flash_wait_idle(void)
     }
 }
 
-/* ??Œæ¥å?™ä¸é¡µï¼?å¸ SysFlashOp ?‹å? ï?Œé??æ»çº¿å?™é?è?•ï?? */
+/* ??å±¾ãƒ¥?æ¬Žæã€‰é”›?ç”¯ SysFlashOp ?å¬ª?ç‹…?å²„??å©Šçº¿ï¿½?æ¬“?å¶ˆ?æ›ª?? */
 static int flash_write_page_sync(uint32_t addr, const uint8_t *buf, uint32_t len)
 {
     int r;
@@ -95,7 +100,7 @@ static int flash_write_page_sync(uint32_t addr, const uint8_t *buf, uint32_t len
     return 0;
 }
 
-/* ??Œæ¥æ“¦ä¸????Œºï¼?å¸? SysFlashOp ?‹å? ï?? */
+/* ??å±¾ãƒ¦æ‘æ¶“????å°¯é”›?ç”¯? SysFlashOp ?å¬ª?ç‹…?? */
 static int flash_erase_sync(uint32_t addr)
 {
     int r;
@@ -153,13 +158,14 @@ int MusicStore_BeginUpload(uint32_t size)
     return 0;
 }
 
-/* è¿”å?žæœå¸?”¶å­—è???•°ï¼?é¡µæ»¡?—¶è°??”¨?–¹?? Poll ?½??˜å?ç»­ä¼ å?©ä?™ï?? */
+/* è¿”ï¿½?ç‚´æ»ƒæƒ›?æ•¹å­—ï¿½???æšŸé”›?é¡µæ»¡?æ¤‚ç’‹??æ•¤?æŸŸ?? Poll ?æƒ¤??æ¨º?å¶‡ç”»ä¼ ï¿½?â•€?æ¬™?? */
 uint32_t MusicStore_Write(const uint8_t *buf, uint32_t len)
 {
     if (!s_init) return len;
+    if (s_pre_active) return len;   /* pre-erase not done: reject data (caller spills and waits for Poll) */
     while (len) {
         uint16_t take;
-        if (s_page_len >= MUSIC_PAGE_SIZE) break;   /* é¡µæ»¡ï¼Œè?”å?žå?©ä? */
+        if (s_page_len >= MUSIC_PAGE_SIZE) break;   /* é¡µæ»¡ï¼Œï¿½?æ–¿?ç‚²?â•€? */
         take = (uint16_t)(MUSIC_PAGE_SIZE - s_page_len);
         if ((uint32_t)take > len) take = (uint16_t)len;
         memcpy(s_page + s_page_len, buf, take);
@@ -171,31 +177,32 @@ uint32_t MusicStore_Write(const uint8_t *buf, uint32_t len)
     return len;
 }
 
-/* å½“å?å????™é¡µ????œ¨????Œºç»å¯¹????Œº?·ï¼??•°?åŒº???ï¼ */
+/* å½“ï¿½?å¶…????æ¬“ã€‰????æ¹ª????å°¯ç»å¯¹????å°¯?å½¿é”›??æšŸ?å¶…å°¯???é”› */
 static uint8_t cur_sector(void)
 {
     return (uint8_t)(s_up_off / MUSIC_SECTOR_SIZE);
 }
 
-/* é¡µç?“å?²è½??˜çŠ¶????œºï¼?æ¯ä¸»å¾ªçŽè???”¨ï¼ */
+/* é¡µï¿½?æ’³?èŒ¶æƒ¤??æ¨¼å§¸????æº€é”›?æ¯ä¸»å¾ªéœï¿½???æ•¤é”› */
 void MusicStore_Poll(void)
 {
     uint8_t sr1;
     uint32_t now;
     int r;
 
-    if (!s_init || s_up_total == 0) return;
+    if (!s_init) return;
     now = SystemTime_Millis();
 
     for (;;) {
         switch (s_st) {
         case 0:
-            if (s_page_len >= MUSIC_PAGE_SIZE) { s_st = 2; continue; }   /* ?•´é¡µå????? */
+            if (s_pre_active) { s_st = 7; continue; }   /* pre-erase in progress */
+            if (s_page_len >= MUSIC_PAGE_SIZE) { s_st = 2; continue; }   /* ?æš£é¡µï¿½????? */
             return;
 
-        case 2:   /* ?œè????‘å?™é¡µï¼šå??ç¡ä¿æ???œ¨????Œºå·²æ? */
+        case 2:   /* ?æ»†????æˆ?æ¬“ã€‰ï¼šï¿½??çº­ä¿ï¿½???æ¹ª????å°¯å·²ï¿½? */
             if (s_erased_sect != cur_sector()) {
-                s_st = 1;        /* è¿›å?¥æ“¦????? */
+                s_st = 1;        /* è¿›ï¿½?ãƒ¦æ‘????? */
                 continue;
             }
             if (!SysFlashOp_TryBegin()) return;
@@ -207,30 +214,56 @@ void MusicStore_Poll(void)
             s_st_t0 = now;
             continue;
 
-        case 1:   /* ?“¦?•°?æ???Œºï¼?ç»å¯¹????Œº?· cur_sectorï¼ */
+        case 1:   /* ?æ‘?æšŸ?å¶†???å°¯é”›?ç»å¯¹????å°¯?å½¿ cur_sectoré”› */
             if (!SysFlashOp_TryBegin()) return;
             r = SfudFlash_StartEraseSector(MUSIC_DATA_BASE + (uint32_t)cur_sector() * MUSIC_SECTOR_SIZE);
             if (r == 1) { SysFlashOp_Release(); return; }
             if (r != 0) { SysFlashOp_Release(); MusicStore_AbortUpload(); return; }
             s_erased_sect = cur_sector();
             s_st_t0 = now;
-            s_st = 6;   /* ?? WIP ç­‰å?? */
+            s_st = 6;   /* ?? WIP ç­‰ï¿½?? */
             continue;
 
-        case 6:   /* ?? WIP ç­‰ï???•°?®????Œºï¼ */
+        case 6:   /* ?? WIP ç­‰ï¿½???æšŸ?åµ????å°¯é”› */
             if (now - s_st_t0 > MUSIC_ERASE_TMO) { SysFlashOp_Release(); MusicStore_AbortUpload(); return; }
             if (flash_idle(&sr1) != 0) return;
             SysFlashOp_Release();
-            s_st = 2;   /* ??žå?™é? */
+            s_st = 2;   /* ??ç‚²?æ¬“? */
             continue;
 
-        case 3:   /* é¡µå?? WIP ç­ */
+        case 3:   /* é¡µï¿½?? WIP ç»› */
             if (now - s_st_t0 > MUSIC_PAGE_TMO) { SysFlashOp_Release(); MusicStore_AbortUpload(); return; }
             if (flash_idle(&sr1) != 0) return;
             SysFlashOp_Release();
             s_up_off  += s_page_len;
             s_page_len = 0;
             s_st = 0;
+            continue;
+
+        case 7:   /* pre-erase: kick current sector erase (header -> old data sectors) */
+            if (!SysFlashOp_TryBegin()) return;
+            {
+                uint32_t a = (s_pre_cur == 0) ? MUSIC_FLASH_BASE
+                             : MUSIC_DATA_BASE + ((uint32_t)(s_pre_cur - 1U)) * MUSIC_SECTOR_SIZE;
+                r = SfudFlash_StartEraseSector(a);
+                if (r == 1) { SysFlashOp_Release(); return; }
+                if (r != 0) { SysFlashOp_Release(); s_pre_active = 0; s_st = 0; continue; }
+                s_st_t0 = now;
+                s_st = 8;
+            }
+            continue;
+
+        case 8:   /* pre-erase WIP wait */
+            if (now - s_st_t0 > MUSIC_ERASE_TMO) { SysFlashOp_Release(); s_pre_active = 0; s_st = 0; return; }
+            if (flash_idle(&sr1) != 0) return;
+            SysFlashOp_Release();
+            s_pre_cur++;
+            if (s_pre_cur >= s_pre_total) {
+                s_pre_active = 0;
+                s_has_fw = 0;
+                s_file_size = 0;
+                s_st = 0;
+            }
             continue;
 
         default:
@@ -240,7 +273,7 @@ void MusicStore_Poll(void)
     }
 }
 
-/* Finishï¼šå?¨å???½?? + ??™å?¨å±å¤´ï¼???Œæ¥ç?­ä?‹åŠ¡ï¼Œè?”å? 0=??å??ï¼ */
+/* Finishï¼šï¿½?ã„¥???æƒ¤?? + ??æ¬?ã„¥åžã”é”›???å±¾ãƒ§?ï¿½ï¿½?å¬ªå§Ÿï¼Œï¿½?æ–¿? 0=??æ„¬??é”› */
 int MusicStore_Finish(uint32_t full_crc, uint32_t size)
 {
     MusicGlobalHdr_t h;
@@ -249,7 +282,7 @@ int MusicStore_Finish(uint32_t full_crc, uint32_t size)
     if (!s_init || size != s_up_total || size == 0) return -1;
 
 
-    /* æ®‹ç?™å?Šé¡µ?½??˜ï????Œæ­¥ï¼? */
+    /* æ®‹ï¿½?æ¬?å©‡ã€‰?æƒ¤??æ©ˆ????å±¾ï¿½ãƒ¯ï¿½? */
     if (s_page_len > 0) {
         if (s_erased_sect != cur_sector()) {
             if (flash_erase_sync(MUSIC_DATA_BASE + (uint32_t)cur_sector() * MUSIC_SECTOR_SIZE) != 0)
@@ -262,7 +295,7 @@ int MusicStore_Finish(uint32_t full_crc, uint32_t size)
         s_page_len = 0;
     }
 
-    /* ??™å?¨å±å¤´ï¼?????Œº0ï¼‰â”â”å???“¦??Žå?™ï?Œä?è???›¿?¢?—§?›ºä» */
+    /* ??æ¬?ã„¥åžã”é”›?????å°¯0ï¼‰éˆ¹éˆ¹ï¿½???æ‘??åº¡?æ¬™?å±¼?æ¿Š???æµ›?å´²?æ£«?æµæµ  */
     h.magic = MUSIC_HDR_MAGIC;
     h.version = MUSIC_HDR_VERSION;
     h.size = size;
@@ -278,13 +311,38 @@ int MusicStore_Finish(uint32_t full_crc, uint32_t size)
     return 0;
 }
 
+void MusicStore_Wipe(void)
+{
+    if (!s_init) return;
+    s_st = 0; s_up_total = 0; s_page_len = 0; s_up_off = 0;
+    s_pre_active = 0; s_pre_total = 0; s_pre_cur = 0;
+    /* åªæ“¦å…¨å±€å¤´æ‰‡åŒº: å¤´å¤±æ•ˆåŽ TrackCount=0, åˆ—è¡¨å³ç©º; æ•°æ®åŒºç•™å¾…ä¸‹æ¬¡ä¸Šä¼ æŒ‰éœ€å†æ“¦ */
+    if (flash_erase_sync(MUSIC_FLASH_BASE) == 0) {
+        s_has_fw = 0;
+        s_file_size = 0;
+    }
+}
+
 void MusicStore_AbortUpload(void)
 {
     s_st = 0; s_page_len = 0; s_up_off = 0; s_up_total = 0;
     s_has_fw = (s_file_size > 0);
 }
 
-/* ---- ??—è¡¨ / è¯»å?? ---- */
+void MusicStore_PrepareWipe(void)
+{
+    uint32_t n;
+    if (!s_init) return;
+    if (!s_has_fw || s_file_size == 0) return;   /* no old firmware: nothing to pre-erase */
+    n = (s_file_size + MUSIC_SECTOR_SIZE - 1U) / MUSIC_SECTOR_SIZE;
+    if (n > 32U) n = 32U;
+    s_pre_total = (uint8_t)n + 1U;   /* +1 header sector */
+    s_pre_cur   = 0;
+    s_pre_active = 1;
+    s_st = 7;
+}
+
+/* ---- ??æ¥„ã€ƒ / è¯»ï¿½?? ---- */
 
 uint16_t MusicStore_TrackCount(void)
 {

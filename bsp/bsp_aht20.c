@@ -1,4 +1,4 @@
-#ifndef BOOTLOADER_BUILD
+﻿#ifndef BOOTLOADER_BUILD
 #include "bsp_aht20.h"
 #include "pin_config.h"
 #include "system_time.h"

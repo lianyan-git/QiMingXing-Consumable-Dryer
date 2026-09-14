@@ -1,4 +1,4 @@
-#include "board.h"
+﻿#include "board.h"
 
 #include "pin_config.h"
 #include "bsp_ntc.h"

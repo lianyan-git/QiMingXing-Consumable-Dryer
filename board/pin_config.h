@@ -1,4 +1,4 @@
-/*
+﻿/*
  * pin_config.h
  * STM32F103C8T6 引脚定义
  * 

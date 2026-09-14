@@ -1,4 +1,4 @@
-/*
+﻿/*
  * encoder.h
  * EC11旋转编码器驱动
  */
@@ -23,4 +23,6 @@ void Encoder_TickISR(void);   /* 1kHz SysTick 采样：不丢相位，主循环�
 
 extern volatile uint32_t g_last_input_ms;  /* 最后输入时间(ms), 供熄屏计时 */
 
+extern volatile uint8_t g_enc_cursor_step; /* cursor step: velocity-based, 1(slow)..ENC_STEP_MAX(fast) */
+uint8_t EncWrap(uint8_t count, int8_t dir, uint8_t cur); /* wrap step movement by g_enc_cursor_step */
 #endif /* __ENCODER_H */

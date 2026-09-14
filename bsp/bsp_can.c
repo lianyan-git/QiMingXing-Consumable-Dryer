@@ -1,4 +1,4 @@
-/*
+﻿/*
  * bsp_can.c
  * CAN 总线驱动 (bxCAN1, PB8=RX / PB9=TX)
  * 500kbps 默认，标准帧(11bit ID)，滤波全收(FIFO0)，发送阻塞+超时，接收轮询。

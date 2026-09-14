@@ -1,4 +1,4 @@
-#ifndef __STEPPER_MOTOR_H
+﻿#ifndef __STEPPER_MOTOR_H
 #define __STEPPER_MOTOR_H
 
 #include <stdint.h>

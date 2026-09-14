@@ -1,4 +1,4 @@
-/*
+﻿/*
  * music_play.h — 蜂鸣器音乐播放器
  *
  * 数据源：内置曲目表（music_data.c，受 `music` 编译宏控制）
@@ -21,6 +21,7 @@ uint8_t MusicPlay_IsPlaying(void);
 uint16_t MusicPlay_CurTrack(void);
 uint32_t MusicPlay_ElapsedMs(void);
 uint32_t MusicPlay_TotalMs(void);
+uint32_t MusicPlay_FinishMs(void);           /* 自然结束时间戳(0=无) */
 uint16_t MusicPlay_ProgressPct(void);        /* 0..100 */
 
 /* 曲目总表（内置+外部合并） */

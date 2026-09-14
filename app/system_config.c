@@ -1,4 +1,4 @@
-#ifndef BOOTLOADER_BUILD
+﻿#ifndef BOOTLOADER_BUILD
 #include "system_config.h"
 #include "shared_defs.h"
 #include "sfud_flash.h"
