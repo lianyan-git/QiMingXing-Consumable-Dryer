@@ -144,6 +144,7 @@ void MusicStore_Init(void)
 
 int MusicStore_HasFirmware(void)   { return s_init && s_has_fw; }
 uint32_t MusicStore_FileSize(void) { return s_file_size; }
+uint32_t MusicStore_WrittenOff(void) { return s_up_off; }
 
 int MusicStore_BeginUpload(uint32_t size)
 {
@@ -197,7 +198,7 @@ void MusicStore_Poll(void)
         switch (s_st) {
         case 0:
             if (s_pre_active) { s_st = 7; continue; }   /* pre-erase in progress */
-            if (s_page_len >= MUSIC_PAGE_SIZE) { s_st = 2; continue; }   /* ?暣页�????? */
+            if (s_page_len > 0) { s_st = 2; continue; } /* 有数据即写(含不足一页的残页, 否则最后一包 ACK 永不发) */
             return;
 
         case 2:   /* ?滆????戝?欓〉：�??纭保�???湪????尯已�? */
@@ -327,6 +328,21 @@ void MusicStore_AbortUpload(void)
 {
     s_st = 0; s_page_len = 0; s_up_off = 0; s_up_total = 0;
     s_has_fw = (s_file_size > 0);
+}
+
+
+int MusicStore_WipeForSize(uint32_t size)
+{
+    uint32_t n = (size + MUSIC_SECTOR_SIZE - 1U) / MUSIC_SECTOR_SIZE;
+    uint32_t i;
+    if (n > 32U) n = 32U;   /* 上限 128KB, 实际 .mub 很小 */
+    if (flash_erase_sync(MUSIC_FLASH_BASE) != 0) return -1;   /* 头扇区 */
+    for (i = 0; i < n; i++) {
+        if (flash_erase_sync(MUSIC_DATA_BASE + i * MUSIC_SECTOR_SIZE) != 0) return -1;
+        s_has_fw = 0; s_file_size = 0;
+    }
+    s_pre_active = 0; s_pre_total = 0; s_pre_cur = 0;
+    return 0;
 }
 
 void MusicStore_PrepareWipe(void)

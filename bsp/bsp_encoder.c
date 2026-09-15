@@ -7,6 +7,8 @@
 #include "system_config.h"
 #include "pin_config.h"
 #include "system_time.h"
+#include "esp_link.h"
+#include "lang_ota.h"
 #include "ui_manager.h"
 
 #include "stm32f10x.h"
@@ -30,6 +32,7 @@ extern uint8_t MusicPlay_IsPlaying(void);
 extern uint16_t MusicPlay_CurTrack(void);
 extern void MusicPlay_Stop(void);
 extern void MusicStore_Wipe(void);
+extern void MusicOta_Abort(void);
 extern int  MusicPlay_Play(uint16_t track);
 extern void EspLink_NotifyPresetsChanged(void);
 
@@ -303,6 +306,16 @@ static void time_commit(void)
     System_RequestSave();
 }
 
+/* 语言引导页退出(仅设置页手动进入且无传输时允许): 关语言AP, 回设置页 */
+static void lang_guide_exit(void)
+{
+    g_sys.lang_from_settings = 0;
+    EspLink_LangCloseAp();
+    g_sys.current_screen = SCREEN_SETTINGS;
+    g_sys.selected_item = 7;
+    g_sys.ui_force_redraw = 1;
+}
+
 void Encoder_Process(void)
 {
     static Screen_t last_proc_screen = (Screen_t)0xFF;
@@ -375,6 +388,9 @@ if (evt == ENC_EVT_LONG_PRESS) {
                 g_sys.current_screen = SCREEN_MENU;
                 g_sys.selected_item = 0;
                 return;
+            case SCREEN_LANG_LOAD:
+            if (g_sys.lang_from_settings && !LangOta_Active()) { lang_guide_exit(); return; }
+            break;   /* 引导页或传输中: 忽略 */
             default:
                 g_sys.current_screen = SCREEN_MAIN;
                 g_sys.selected_item = 0;
@@ -383,6 +399,11 @@ if (evt == ENC_EVT_LONG_PRESS) {
     }
 
     switch (g_sys.current_screen) {
+
+case SCREEN_LANG_LOAD:
+        if (evt == ENC_EVT_CLICK && g_sys.lang_from_settings && !LangOta_Active())
+            lang_guide_exit();
+        break;
 
 case SCREEN_MAIN:
         if (evt == ENC_EVT_CW) {
@@ -905,15 +926,10 @@ uint8_t is_tmc = (g_sys.params.motor_driver == MOTOR_DRIVER_TMC2208 ||
             /* 缂栬緫涓锛氭棆杞鐩存帴鏀瑰硷紙瀹炴椂鍒锋柊鐢 UI_Update 閫愯岄噸缁橈級锛
              * 鍗曞嚮閫鍑哄綋鍓嶉」 鈫 鍚庡彴淇濆瓨 */
             if (evt == ENC_EVT_CW || evt == ENC_EVT_CCW) {
-                uint8_t drv_before = g_sys.params.motor_driver;
                 motor_edit_set(g_sys.selected_item, (evt == ENC_EVT_CW));
-                if (g_sys.selected_item == 7 && drv_before != g_sys.params.motor_driver) {
-                    g_sys.ui_force_redraw = 1;   /* 驱动切换: 行数/内容变化, 触发一次重绘 */
-                }
             } else if (evt == ENC_EVT_CLICK) {
                 g_sys.motor_edit_active = 0;
                 System_RequestSave();
-                g_sys.ui_force_redraw = 1;   /* 退出编辑: 确保驱动变化后选项立即刷新 */
             }
         } else {
             if (evt == ENC_EVT_CW) UI_MotorScroll(1);
@@ -1033,11 +1049,28 @@ uint8_t is_tmc = (g_sys.params.motor_driver == MOTOR_DRIVER_TMC2208 ||
                 System_RequestSave();
             }
         } else {
+            if (g_sys.lang_popup) {
+                /* 上传弹窗活动: 旋转无效; 单击按状态(1=开AP 2=关闭; 3/4/5 不打断) */
+                if (evt == ENC_EVT_CLICK) {
+                    if (g_sys.lang_popup == 1) {
+                        EspLink_LangOpenAp();
+                        g_sys.lang_popup = 2;
+                    } else if (g_sys.lang_popup == 2) {   /* 未传输可退出: 关AP回设置 */
+                        EspLink_LangCloseAp();
+                        LangOta_Abort();
+                        g_sys.lang_popup = 0;
+                    }
+                }
+                break;
+            }
             if (evt == ENC_EVT_CW) UI_SettingsScroll(1);
             else if (evt == ENC_EVT_CCW) UI_SettingsScroll(-1);
             else if (evt == ENC_EVT_CLICK) {
-                if (g_sys.selected_item >= 7) g_sys.current_screen = SCREEN_MENU;  /* 閫鍑 */
-                else {
+                if (g_sys.selected_item >= 8) g_sys.current_screen = SCREEN_MENU;  /* 閫鍑 */
+                else if (g_sys.selected_item == 7) {   /* 更新字库: 设置页弹出语言上传弹窗 */
+                    g_sys.settings_edit_active = 0;
+                    g_sys.lang_popup = 1;
+                } else {
                     g_sys.settings_edit_active = 1;
                     if (g_sys.selected_item == 6) { g_sys.rgb_bright_popup = 1; g_sys.rgb_bright_sel = 0; g_sys.rgb_bright_edit = 0; }
                 }
@@ -1084,16 +1117,14 @@ case SCREEN_MUSIC:
             if (evt == ENC_EVT_CLICK && g_sys.selected_item == 0) {
                 if (g_sys.music_popup == 1) {
                     EspLink_MusicOpenAp();            /* 寮鍚涓婁紶 AP */
-                } else if (g_sys.music_popup == 2) {
-                    if (g_sys.wifi_ap_mode) {          /* AP 已开: 再点关闭 */
-                        EspLink_MusicCloseAp();
-                        g_sys.music_popup = 0;
-                        g_sys.wifi_ap_mode = 0;
-                    } else {                            /* AP 没起来(冷启动中/失败): 再点重试冷启动 */
-                        EspLink_MusicOpenAp();
-                    }
+                                } else if (g_sys.music_popup == 2) {
+                    /* 单击始终 = 关闭弹窗/取消本次上传; 重新开启需再单击“上传音乐” */
+                    EspLink_MusicCloseAp();   /* AP 已开则关 AP; 未开则停止握手(无害) */
+                    MusicOta_Abort();         /* 清理残留接收态, 恢复行协议 */
+                    g_sys.music_popup = 0;
+                    g_sys.wifi_ap_mode = 0;
                 }
-                /* 3=涓婁紶涓 4=瀹屾垚 5=澶辫触锛氬崟鍑讳笉鎵撴柇 */
+              /* 3=涓婁紶涓 4=瀹屾垚 5=澶辫触锛氬崟鍑讳笉鎵撴柇 */
             }
             break;
         }

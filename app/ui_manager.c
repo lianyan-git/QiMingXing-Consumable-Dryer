@@ -14,6 +14,7 @@
 #include "esp_link.h"
 #include "music_play.h"
 #include "music_store.h"
+#include "lang_ota.h"
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -479,6 +480,35 @@ static void __attribute__((unused)) draw_card_bg_at(uint16_t x, uint16_t y, uint
 #define PB_Y   92U
 #define PB_W   180U
 #define PB_H   14U
+
+/* 语言字库引导页：无字库时显示 AP/密码/IP/进度(全 ASCII, 不依赖字库) */
+/* 高对比进度条(240x135 屏), 引导页用 (ASCII 大字), BL 样式精简 */
+static void lang_draw_progress(uint8_t pct)
+{
+    char buf[8];
+    uint16_t pw;
+    if (pct > 100U) pct = 100U;
+    TFT_FillRect(16, 64, (uint16_t)(TFT_WIDTH - 32), 12, UI_BG);
+    pw = (uint16_t)((uint32_t)(TFT_WIDTH - 34) * (uint16_t)pct / 100U);
+    if (pw) TFT_FillRect(17, 65, pw, 10, TFT_COLOR(0x25,0xE0,0x7A));
+    sprintf(buf, "%u%%", (unsigned)pct);
+    { uint32_t lw = (uint32_t)strlen(buf) * 12U;
+      TFT_FillRect(16, 84, TFT_WIDTH - 32, 22, TFT_COLOR(0x22,0x26,0x38));
+      TFT_DrawString((uint16_t)((TFT_WIDTH - (uint16_t)lw) / 2U), 84, buf,
+                     TFT_COLOR(0xFF,0xFF,0xFF), TFT_COLOR(0x22,0x26,0x38), 2); }
+}
+
+void UI_DrawLangLoad(void)
+{
+    TFT_FillScreen(TFT_COLOR(0x22,0x26,0x38));
+    TFT_DrawString((TFT_WIDTH - (uint16_t)(13 * 12U)) / 2U, 6, "Language load", TFT_COLOR(0x8B,0x5C,0xF6), TFT_COLOR(0x22,0x26,0x38), 2);
+    TFT_DrawString(20, 28, "SSID : QIMINGXING", TFT_COLOR(0xFF,0xFF,0xFF), TFT_COLOR(0x22,0x26,0x38), 1);
+    TFT_DrawString(20, 40, "PASS : 12345678",  TFT_COLOR(0xFF,0xFF,0xFF), TFT_COLOR(0x22,0x26,0x38), 1);
+    TFT_DrawString(20, 52, "URL  : 192.168.4.1", TFT_COLOR(0xFF,0xFF,0xFF), TFT_COLOR(0x22,0x26,0x38), 1);
+
+    g_sys.lang_upload_pct = 0;
+    lang_draw_progress(0);
+}
 
 void UI_ShowBootScreen(void)
 {
@@ -949,7 +979,7 @@ void UI_DrawTimeAdjust(void)
     TFT_FillRect(152, 67, 8, 8, UI_ACCENT2);
     /* 搴曢儴灞呬腑鏄剧ず褰撳墠棰勮惧悕绉帮細褰撳墠鐑樺共棰勮�井句负锛殮XXX锛堟爣绛剧敤榛勮壊锛屾殫搴曟竻鏅帮級 */
     {
-        static const char *lbl = "当前烘干预设为：";
+        static const char *lbl = "当前烘干预设为:";
         const char *nm = "PETG";
         uint16_t lw, x0;
         if (g_sys.params.current_preset < g_sys.params.preset_count) {
@@ -1056,7 +1086,7 @@ void UI_DrawPidAutotune(void)
         TFT_FillRect(42, 68, (uint16_t)(156U * pct / 100U), 10, COLOR_GREEN);
         sprintf(buf, "%d%%", pct);
         TFT_DrawString((TFT_WIDTH - (uint16_t)(strlen(buf) * 12U)) / 2U, 86, buf, UI_TEXT, UI_BG, 2);
-    } else {
+    }     else {
         TFT_DrawStringZh((TFT_WIDTH - zh_str_width("单击开始校准")) / 2U, 46, "单击开始校准", COLOR_YELLOW, UI_BG);
         sprintf(buf, "KP:%.2f KI:%.2f KD:%.2f", g_sys.params.pid_ntc_kp, g_sys.params.pid_ntc_ki, g_sys.params.pid_ntc_kd);
         TFT_DrawString((TFT_WIDTH - (uint16_t)(strlen(buf) * 12U)) / 2U, 86, buf, COLOR_CYAN, UI_BG, 2);
@@ -1787,10 +1817,12 @@ void UI_DrawSafetyAlert(void)
 /* 鍓嶇疆澹版槑锛氳剧疆椤垫暟鍊兼枃鏈鐢熸垚锛屼緵鏁村睆缁樺埗涓庡崟琛屽疄鏃跺埛鏂板叡鐢 */
 static void settings_row_str(uint8_t i, char *buf);
 
+static void lang_popup_draw(void);   /* 语言字库上传弹窗(设置页) */
+
 /* 璁剧疆椤靛崟琛岀粯鍒讹紙鏍囩+楂樹寒+鍊/寮鍏虫粦鍧楋級 */
 static void settings_draw_row(uint8_t i, uint16_t y)
 {
-    static const char *kLabels[] = {"蜂鸣器联动","蜂鸣器音量","灯光开关","背光","主题","熄屏","RGB灯带","退出"};
+    static const char *kLabels[] = {"蜂鸣器联动","蜂鸣器音量","灯光开关","背光","主题","熄屏","RGB灯带","更新字库","退出"};
     char buf[32];
     TFT_FillRect(10, y, 95, 16, UI_BG);
     if (i == g_sys.selected_item) {
@@ -1890,7 +1922,7 @@ static void draw_rgb_bar(uint8_t item)
 void UI_DrawSettingsScreen(void)
 {
     uint8_t i;
-    uint8_t cnt = 8;
+    uint8_t cnt = 9;
     TFT_FillScreen(UI_BG);
     draw_page_title_zh("设置", UI_ACCENT);
     for (i = 0; i < cnt; i++) {
@@ -1899,12 +1931,13 @@ void UI_DrawSettingsScreen(void)
         settings_draw_row(i, (uint16_t)y);
     }
     draw_scrollbar(cnt, 5, (uint8_t)(g_sys.pixel_offset / SCR_ROW_H), SCR_VIEW_Y, SCR_VIEW_H);
+    if (g_sys.lang_popup) lang_popup_draw();
 }
 
 /* 璁剧疆椤靛彲瑙嗗尯鏁村尯閲嶇粯锛堟粴鍔ㄧ敤锛 */
 static void settings_redraw_viewport(void)
 {
-    uint8_t cnt = 8;
+    uint8_t cnt = 9;
     TFT_FillRect(0, SCR_VIEW_Y, 233, SCR_VIEW_H, UI_BG);
     for (uint8_t i = 0; i < cnt; i++) {
         int16_t y = (int16_t)(SCR_VIEW_Y - g_sys.pixel_offset + i * SCR_ROW_H);
@@ -1917,7 +1950,7 @@ static void settings_redraw_viewport(void)
 /* 璁剧疆椤电紪鐮佸櫒婊氬姩锛氭洿鏂伴変腑绱㈠紩(寰鐜)涓 pixel_offset锛岄噸缁樺彲瑙嗗尯 */
 void UI_SettingsScroll(int dir)
 {
-    uint8_t cnt = 8;
+    uint8_t cnt = 9;
     int16_t target, max_off;
     uint8_t old_sel = g_sys.selected_item;
     uint8_t off_old = (uint8_t)(g_sys.pixel_offset / SCR_ROW_H);
@@ -2376,8 +2409,55 @@ void UI_DrawMusicPopup(void)
         TFT_DrawStringZh((TFT_WIDTH - zh_str_width("上传完成")) / 2U, (uint16_t)(py + 14), "上传完成", COLOR_GREEN, UI_CARD);
         TFT_DrawStringZh((TFT_WIDTH - zh_str_width("已存外部Flash")) / 2U, (uint16_t)(py + 44), "已存外部Flash", UI_FG_DIM, UI_CARD);
     } else if (g_sys.music_popup == 5) {
-        TFT_DrawStringZh((TFT_WIDTH - zh_str_width("上传失败，再击重试")) / 2U, (uint16_t)(py + 14), "上传失败，再击重试", COLOR_RED, UI_CARD);
+        TFT_DrawStringZh((TFT_WIDTH - zh_str_width("上传失败,再击重试")) / 2U, (uint16_t)(py + 14), "上传失败,再击重试", COLOR_RED, UI_CARD);
     }
+}
+
+/* 语言字库上传弹窗(与音乐上传弹窗同风格): 1=待开AP 2=AP已开等待上传 3=上传中 4=完成 5=失败 */
+static void lang_popup_draw(void)
+{
+    uint16_t pw = 190, ph = 110;
+    uint16_t px = (TFT_WIDTH - pw) / 2;
+    uint16_t py = 12;
+    char buf[8];
+    uint8_t pct = g_sys.lang_upload_pct;
+    fill_round_rect(px, py, pw, ph, UI_CARD, 8);
+    draw_round_outline(px, py, pw, ph, UI_ACCENT2, 8, 2);
+    if (g_sys.lang_popup == 1) {
+        TFT_DrawStringZh((TFT_WIDTH - zh_str_width("单击开启上传AP")) / 2U, (uint16_t)(py + 14), "单击开启上传AP", UI_FG, UI_CARD);
+    } else if (g_sys.lang_popup == 2) {
+        TFT_DrawStringZh((TFT_WIDTH - zh_str_width("连接热点")) / 2U, (uint16_t)(py + 14), "连接热点", UI_FG, UI_CARD);
+        TFT_DrawString((TFT_WIDTH - 10 * 12U) / 2U, (uint16_t)(py + 34), "QIMINGXING", COLOR_CYAN, UI_CARD, 2);
+        TFT_DrawString((TFT_WIDTH - 9 * 6U) / 2U, (uint16_t)(py + 60), "192.168.4.1", COLOR_GREEN, UI_CARD, 1);
+        TFT_DrawStringZh((TFT_WIDTH - zh_str_width("点击关闭")) / 2U, (uint16_t)(py + 84), "点击关闭", UI_FG_DIM, UI_CARD);
+    } else if (g_sys.lang_popup == 3) {
+        TFT_DrawStringZh((TFT_WIDTH - zh_str_width("上传中")) / 2U, (uint16_t)(py + 14), "上传中", UI_FG, UI_CARD);
+        fill_round_rect((uint16_t)(px + 25), (uint16_t)(py + 40), 140, 14, UI_BG, 7);
+        if (pct) fill_round_rect((uint16_t)(px + 26), (uint16_t)(py + 41), (uint16_t)(138U * pct / 100U), 12, COLOR_GREEN, 6);
+        sprintf(buf, "%d%%", (int)pct);
+        TFT_DrawString((TFT_WIDTH - (uint16_t)(strlen(buf) * 6U)) / 2U, (uint16_t)(py + 62), buf, UI_FG_DIM, UI_CARD, 1);
+    } else if (g_sys.lang_popup == 4) {
+        TFT_DrawStringZh((TFT_WIDTH - zh_str_width("上传完成")) / 2U, (uint16_t)(py + 14), "上传完成", COLOR_GREEN, UI_CARD);
+        TFT_DrawStringZh((TFT_WIDTH - zh_str_width("已存外部Flash")) / 2U, (uint16_t)(py + 44), "已存外部Flash", UI_FG_DIM, UI_CARD);
+    } else if (g_sys.lang_popup == 5) {
+        TFT_DrawStringZh((TFT_WIDTH - zh_str_width("上传失败,再击重试")) / 2U, (uint16_t)(py + 14), "上传失败,再击重试", COLOR_RED, UI_CARD);
+    }
+}
+
+/* 语言上传进度：只刷新进度条+数字（弹窗状态切换时已整卡画过，避免闪烁） */
+static void lang_popup_refresh_progress(void)
+{
+    uint16_t pw = 190;
+    uint16_t px = (TFT_WIDTH - pw) / 2;
+    uint16_t py = 12;
+    char buf[8];
+    uint8_t pct = LangOta_GetPct();
+    g_sys.lang_upload_pct = pct;
+    fill_round_rect((uint16_t)(px + 25), (uint16_t)(py + 40), 140, 14, UI_BG, 7);
+    if (pct) fill_round_rect((uint16_t)(px + 26), (uint16_t)(py + 41), (uint16_t)(138U * pct / 100U), 12, COLOR_GREEN, 6);
+    TFT_FillRect((uint16_t)(px + 45), (uint16_t)(py + 60), (uint16_t)(pw - 90), 12, UI_CARD);
+    sprintf(buf, "%d%%", (int)pct);
+    TFT_DrawString((TFT_WIDTH - (uint16_t)(strlen(buf) * 6U)) / 2U, (uint16_t)(py + 62), buf, UI_FG_DIM, UI_CARD, 1);
 }
 
 void UI_DrawCanScreen(void)
@@ -2451,6 +2531,7 @@ void UI_Update(void)
             case SCREEN_CAN:           UI_DrawCanScreen(); break;
             case SCREEN_MUSIC:         UI_DrawMusic(); break;
             case SCREEN_MUSIC_LIST:    UI_DrawMusicList(); break;
+                        case SCREEN_LANG_LOAD:  UI_DrawLangLoad(); break;
             case SCREEN_OTA:
                 UI_ResetOTAScreen();
                 UI_DrawOTAScreen();
@@ -2559,7 +2640,25 @@ void UI_Update(void)
                     }
                     case SCREEN_MOTOR_ADJUST: {
                         static uint32_t last_tmc_check = 0;
+                        static uint8_t last_mdrv = 0xFF;
                         /* 鍍忕礌婊氬姩鐢辩紪鐮佸櫒 UI_MotorScroll 閲嶇粯鍙瑙嗗尯锛屾ゅ勪笉鍐嶆暣灞忓埛鏂 */
+                        if (redraw) last_mdrv = g_sys.params.motor_driver;
+                        if (!redraw && g_sys.params.motor_driver != last_mdrv) {
+                            /* 驱动切换: 保持选中行并滚动视口使其可见(不跳顶部) */
+                            uint8_t is_tmc2 = (g_sys.params.motor_driver == MOTOR_DRIVER_TMC2208 ||
+                                               g_sys.params.motor_driver == MOTOR_DRIVER_TMC2209);
+                            uint8_t cnt2 = is_tmc2 ? 11 : 9;
+                            int16_t tgt2, mx2;
+                            if (g_sys.selected_item >= cnt2) g_sys.selected_item = (uint8_t)(cnt2 - 1);
+                            tgt2 = (int16_t)g_sys.selected_item * SCR_ROW_H;
+                            if (tgt2 < g_sys.pixel_offset) g_sys.pixel_offset = tgt2;
+                            else if (tgt2 + SCR_ROW_H > g_sys.pixel_offset + SCR_VIEW_H) g_sys.pixel_offset = (int16_t)(tgt2 + SCR_ROW_H - SCR_VIEW_H);
+                            mx2 = (int16_t)(cnt2 * SCR_ROW_H - SCR_VIEW_H);
+                            if (g_sys.pixel_offset < 0) g_sys.pixel_offset = 0;
+                            if (mx2 > 0 && g_sys.pixel_offset > mx2) g_sys.pixel_offset = mx2;
+                            last_mdrv = g_sys.params.motor_driver;
+                            motor_redraw_viewport();
+                        }
                         if (!redraw && g_sys.motor_edit_active) {
                             static char last_m_row[32] = "";
                             char buf[32];
@@ -2910,6 +3009,47 @@ void UI_Update(void)
                                 }
                             }
                         }
+                        /* 语言字库上传弹窗(与音乐弹窗同状态机): 弹窗变化整卡画; 上传中100ms刷进度; 完成→重启生效; 失败→自动收起 */
+                        {
+                            static uint8_t last_lpn = 0xFF;
+                            static uint32_t last_lpt = 0;
+                            uint32_t nowm = SystemTime_Millis();
+                            if (g_sys.lang_popup != last_lpn) {
+                                last_lpn = g_sys.lang_popup;
+                                redraw = 1;
+                                if (g_sys.lang_popup == 4 || g_sys.lang_popup == 5) last_lpt = nowm;
+                            }
+                            if (!redraw && g_sys.lang_popup == 2 && LangOta_Active()) {
+                                g_sys.lang_popup = 3;        /* 握手到达: 弹窗切上传中 */
+                                last_lpt = nowm;
+                                redraw = 1;
+                            }
+                            if (!redraw && g_sys.lang_popup == 3) {
+                                if (g_sys.lang_download_done) {
+                                    g_sys.lang_popup = 4;     /* 完成 */
+                                    last_lpt = nowm;
+                                    redraw = 1;
+                                } else if (!LangOta_Active() && LangOta_GotHand()) {
+                                    g_sys.lang_popup = 5;     /* 失败 */
+                                    last_lpt = nowm;
+                                    redraw = 1;
+                                }
+                            }
+                            if (g_sys.lang_popup == 3 && (uint32_t)(nowm - last_lpt) >= 100) {
+                                last_lpt = nowm;
+                                lang_popup_refresh_progress();
+                            }
+                            if (g_sys.lang_popup == 4 && (uint32_t)(nowm - last_lpt) >= 1800) {
+                                /* 显示"上传完成"后重启, 使新字库生效 */
+                                System_FlushSave();
+                                NVIC_SystemReset();
+                            }
+                            if (g_sys.lang_popup == 5 && (uint32_t)(nowm - last_lpt) >= 1800) {
+                                g_sys.lang_popup = 0;        /* 失败自动收起, 可重试 */
+                                g_sys.lang_download_done = 0;
+                                redraw = 1;
+                            }
+                        }
                         break;
                     }
                     case SCREEN_CAN: {
@@ -3012,8 +3152,28 @@ void UI_Update(void)
                                 }
                             }
                         }
+                                            break;
+                    }case SCREEN_LANG_LOAD: {
+                        static uint32_t last_lp = 0;
+                        uint32_t nowm = SystemTime_Millis();
+                        if ((uint32_t)(nowm - last_lp) >= 200U) {
+                            last_lp = nowm;
+                            {
+                                uint8_t p = LangOta_GetPct();
+                                if (p != g_sys.lang_upload_pct) {
+                                    g_sys.lang_upload_pct = p;
+                                    lang_draw_progress(p);
+                                }
+                            }
+                        }
+                        if (g_sys.lang_download_done) {
+                            g_sys.lang_download_done = 0;
+                            System_FlushSave();
+                            NVIC_SystemReset();
+                        }
                         break;
                     }
+
                     default: break;
                 }
                 if (redraw) {

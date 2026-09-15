@@ -32,6 +32,8 @@ const char *EspLink_IP(void);         /* "+IP" 鍥炴姤鐨 IP锛屾湭杩炴帴
 
 /* 闊充箰涓婁紶 AP锛氬紑鍚/鍏抽棴锛圓P 鎴 APSTA锛屽彇鍐充簬鏄鍚﹀凡杩 STA锛 */
 void EspLink_MusicOpenAp(void);
+void EspLink_LangOpenAp(void);
+void EspLink_LangCloseAp(void);
 void EspLink_MusicCloseAp(void);
 void EspLink_NotifyPresetsChanged(void); /* 预设增删改后推送预设表给网页 */
 

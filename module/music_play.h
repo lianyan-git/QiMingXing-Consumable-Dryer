@@ -19,6 +19,7 @@ int    MusicPlay_Play(uint16_t track);       /* 0=ok；-1=失败 */
 void   MusicPlay_Stop(void);
 uint8_t MusicPlay_IsPlaying(void);
 uint16_t MusicPlay_CurTrack(void);
+uint16_t MusicPlay_CurFreq(void);          /* 当前音符频率Hz(0=休止), RGB音高灯效用 */
 uint32_t MusicPlay_ElapsedMs(void);
 uint32_t MusicPlay_TotalMs(void);
 uint32_t MusicPlay_FinishMs(void);           /* 自然结束时间戳(0=无) */

@@ -17,6 +17,7 @@
 #include "can_cluster.h"
 #include "esp_link.h"
 #include "music_ota.h"
+#include "lang_ota.h"
 #include "music_store.h"
 #include "stm32f10x.h"
 #include <string.h>
@@ -41,6 +42,7 @@ static uint16_t s_li = 0;
 static uint8_t  s_pending_cfg = 0;     /* OK 鍓嶆敹鍒扮殑閰嶇綉璇锋眰 */
 static uint8_t  s_pending_clr = 0;     /* OK 鍓嶆敹鍒扮殑閲嶆柊閰嶇綉璇锋眰 */
 static uint8_t  s_pending_music = 0;   /* OK 鍓嶆敹鍒扮殑闊充箰涓婁紶 AP 璇锋眰 */
+static uint8_t  s_pending_lang = 0;
 static uint8_t  s_closing = 0;
 static uint8_t  s_pow_on = 0;
 static uint32_t s_close_tick = 0;
@@ -487,11 +489,13 @@ static void link_rx_line(char *line)
         } else if (!strcmp(line, "+DISC")) {
             g_sys.wifi_connected = 0; s_ip[0] = 0;
             if (s_state == ESPLINK_ONLINE) s_state = ESPLINK_CONNECTING;
-        } else if (!strcmp(line, "+MUSICAP")) {
+                } else if (!strcmp(line, "+MUSICAP")) {
             g_sys.music_ota_active = 1;
-                        g_sys.music_popup = 2;
+            g_sys.music_popup = 2;
+            g_sys.wifi_ap_mode = 1;    /* AP 确认已开: 弹窗单击据此区分“关闭”与“重试” */
             MusicStore_PrepareWipe();   /* upload session start: pre-erase old firmware area (header + old data sectors) so data write never stalls on erase */
-        } else if (!strcmp(line, "+MUSICCLOSED")) {
+} else if (!strcmp(line, "+MUSICCLOSED")) {
+            MusicOta_Abort();   /* 清除残留接收态, 保证行协议/Push 恢复 */
             g_sys.music_ota_active = 0;
             g_sys.wifi_ap_mode = 0;
             if (g_sys.music_popup == 2) g_sys.music_popup = 1;    /* 鐢ㄦ埛鍙栨秷涓婁紶锛氬洖鍒板緟寮鍚 */
@@ -502,12 +506,15 @@ static void link_rx_line(char *line)
                 link_send("AT+WEBSTART");
             }
         } else if (!strcmp(line, "+MUSICOK")) {
+            MusicOta_Abort();
             g_sys.music_ota_active = 0;
             g_sys.wifi_ap_mode = 0;
             g_sys.music_popup = 4;    /* 完成态：帧循环 1.8s 后自动收起 */    /* 瀹屾垚鍚庤嚜鍔ㄥ叧寮圭獥 */
             g_sys.ui_force_redraw = 1;
         } else if (!strcmp(line, "+MUSICERR")) {
+            MusicOta_Abort();
             g_sys.music_ota_active = 0;
+            g_sys.wifi_ap_mode = 0;
             g_sys.music_popup = 5;    /* 澶辫触 */
         }
     } else if (line[0] == '{') {
@@ -517,11 +524,14 @@ static void link_rx_line(char *line)
             if (s_pending_clr) { s_pending_clr = 0; link_send("AT+CFGCLR"); }
             s_pending_cfg = 0;
             link_send("AT+CFGAP");
-        } else if (s_pending_music) {
+        } else if (s_pending_music || s_pending_lang) {
+            uint8_t is_lang = s_pending_lang;
             s_pending_music = 0;
-            link_send("AT+MUSICAP");
+            s_pending_lang = 0;
+            link_send(is_lang ? "AT+LANGAP" : "AT+MUSICAP");
             g_sys.music_popup = 2;
             g_sys.music_ota_active = 1;
+            if (is_lang) g_sys.lang_ap_active = 1;
             s_state = ESPLINK_CONFIG;   /* 闊充箰涓婁紶 AP 浼氳瘽锛氫笉鍐嶈嚜鍔 WEBSTART */
             s_ip[0] = 0;
             g_sys.wifi_ap_mode = 1;
@@ -579,6 +589,17 @@ void EspLink_Process(void)
         link_send("AT+WEBSTART");
     }
 
+    /* 音乐会话结束(成功/失败/超时/取消)后若有 WiFi 开关且非配网, 恢复自动连接
+     * 否则 s_state 停在 ESPLINK_CONFIG, PushNow 的 ONLINE 判断让网页永不推送 */
+    if (s_state == ESPLINK_CONFIG && !g_sys.music_ota_active && !s_pending_music
+        && !g_sys.wifi_ap_mode && g_sys.wifi_enabled
+        && (uint32_t)(now - s_state_tick) >= 1000U) {
+        s_state = ESPLINK_CONNECTING;
+        s_state_tick = now;
+        link_send("AT+WEBSTART");
+        s_sig_valid = 0;
+    }
+
     if (s_closing && (uint32_t)(now - s_close_tick) >= 300U) {
         s_closing = 0;
         esp_power(0);
@@ -597,8 +618,12 @@ void EspLink_Process(void)
     }
 
     while (EspUart_ReadByte(&b) != 0) {
-        /* 闊充箰 FSM 甯搁┗鎵甯э紙绌洪棽鏃跺彧鎵 0xAA 甯уご锛屼笉骞叉壈琛屽崗璁锛夛紱
-         * 涓鏃︽彙鎵嬫垚鍔燂紙鏀舵祦涓锛夊垯鐙鍗犲瓧鑺傦紝琛屽崗璁鏆傚仠銆 */
+        /* 璇█/闊充箰 FSM 杞緱鍠傝妭: 宸叉縺娲荤嫭鍗犲瓧鑺?绌洪棽鏃跺弻鍠傝瘑鍒 0x13/0x11 鎻℃墜,
+         * 涓嶅共鎵拌涓崗璁 */
+        if (LangOta_Active()) { LangOta_FeedByte(b); continue; }
+        if (MusicOta_Active()) { MusicOta_FeedByte(b); continue; }
+        LangOta_FeedByte(b);
+        if (LangOta_Active()) continue;
         MusicOta_FeedByte(b);
         if (MusicOta_Active()) continue;
         if (b == '\n') {
@@ -613,7 +638,8 @@ void EspLink_Process(void)
     if (!s_closing) EspLink_PushNow(0);
 
     /* 闊充箰涓婁紶鎺ユ敹 FSM锛氶渶瑕佹椂鎺ㄨ繘钀界洏涓庤秴鏃讹紙鍚 ACK 琛ュ彂锛 */
-    MusicOta_Poll();   /* 闊充箰 FSM 甯搁┗锛氱┖闂叉壂甯/鏀舵祦鎺ㄨ繘锛屽潎鏃犲壇浣滅敤 */
+    MusicOta_Poll();
+    LangOta_Poll();   /* 闊充箰 FSM 甯搁┗锛氱┖闂叉壂甯/鏀舵祦鎺ㄨ繘锛屽潎鏃犲壇浣滅敤 */
 }
 
 void EspLink_OnToggle(uint8_t on)
@@ -655,6 +681,7 @@ void EspLink_StartConfig(void)
  * 避免 ESP 挂死/停留在其它模式时直接发 AT+MUSICAP 无响应、热点起不来。 */
 void EspLink_MusicOpenAp(void)
 {
+    MusicOta_Abort();   /* 清理上一次可能的残留接收态, 保证行协议恢复 */
     if (s_state == ESPLINK_ONLINE) {
         /* WiFi 已在线: 直接发 MUSICAP 切 APSTA(AP+STA 共存), 不断 WiFi */
         s_pending_music = 0;
@@ -677,11 +704,46 @@ void EspLink_MusicOpenAp(void)
     g_sys.music_popup = 2;
 }
 
+/* 语言字库上传 AP：与音乐同模式(在线直接发/离线冷启动) */
+void EspLink_LangOpenAp(void)
+{
+    MusicOta_Abort();
+    LangOta_Abort();
+    g_sys.lang_download_done = 0;
+    if (s_state == ESPLINK_ONLINE) {
+        s_pending_lang = 0;
+        link_send("AT+LANGAP");
+        g_sys.lang_ap_active = 1;
+        return;
+    }
+    EspUart_Init();
+    esp_power(0);
+    s_closing = 0;
+    s_pending_cfg = 0;
+    s_pending_clr = 0;
+    s_pending_lang = 1;
+    s_pow_on = 1;
+    s_pow_ms = 10;
+    s_state_tick = SystemTime_Millis();
+    s_state = ESPLINK_BOOT;
+    s_ip[0] = 0;
+    g_sys.music_ota_active = 0;
+    g_sys.lang_ap_active = 1;
+}
+
 void EspLink_MusicCloseAp(void)
 {
     link_send("AT+MUSICCLOSE");
     s_pending_music = 0;
     g_sys.music_ota_active = 0;
+}
+
+void EspLink_LangCloseAp(void)
+{
+    LangOta_Abort();
+    link_send("AT+LANGCLOSE");
+    s_pending_lang = 0;
+    g_sys.lang_ap_active = 0;
 }
 
 /* 涓绘満涓婇勮惧炲垹鏀瑰悗锛屾妸鏈鏂伴勮捐〃鎺ㄧ粰缃戦〉锛堢綉椤 handleMsg 'PRESET_LIST' 瀹炴椂鍒锋柊锛 */

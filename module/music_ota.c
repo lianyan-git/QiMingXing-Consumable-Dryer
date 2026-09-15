@@ -69,6 +69,19 @@ static void leave_active(void)
     g_sys.music_ota_active = 0;
 }
 
+/* 失败统一处理: 必须 leave_active() 退出接收态.
+ * 否则 s_active 卡 1 → EspLink 将后续 ESP 全部字节丢弃(WiFi/AP/弹窗全冻结). */
+static void fail(void)
+{
+    leave_active();
+    s_error = 1;
+    s_st = S_IDLE;
+    s_ack_pend = 0;
+    s_spill_len = 0;
+    s_spill_off = 0;
+    g_sys.music_popup = 5;   /* 失败态: 帧循环自动收起 */
+}
+
 void MusicOta_Init(void)
 {
     s_st = S_IDLE; s_active = 0; s_error = 0;
@@ -106,8 +119,10 @@ void MusicOta_FeedByte(uint8_t b)
     case S_SIZE3: s_total |= (uint32_t)b << 8;  s_st = S_SIZE4; break;
     case S_SIZE4:
         s_total |= (uint32_t)b;
-        if (s_total == 0 || s_total > MUSIC_MAX_FILE_SIZE) { ack(0); s_error = 1; s_st = S_IDLE; break; }
-        if (MusicStore_BeginUpload(s_total) != 0) { ack(0); s_error = 1; s_st = S_IDLE; break; }
+        if (s_total == 0 || s_total > MUSIC_MAX_FILE_SIZE) { ack(0); fail(); break; }
+        if (MusicStore_BeginUpload(s_total) != 0) { ack(0); fail(); break; }
+        /* 与 OTA 一致: 掌手后先擦净目标扇区(头+数据), 擦完才 ACK, ESP 才分包传 */
+        if (MusicStore_WipeForSize(s_total) != 0) { ack(0); fail(); break; }
         s_recv = 0; s_exp_seq = 0; s_crc = 0xFFFFFFFFUL;
         s_pkt_len = 0; s_pkt_need = 0; s_active = 1; s_error = 0;
         g_sys.music_popup = 3;                  /* 弹窗切上传中 */
@@ -125,12 +140,12 @@ void MusicOta_FeedByte(uint8_t b)
     case S_PKT_SEQH: s_seq = (uint16_t)b << 8; s_st = S_PKT_SEQL; break;
     case S_PKT_SEQL:
         s_seq |= b;
-        if (s_seq != s_exp_seq) { ack(0); s_error = 1; s_st = S_IDLE; break; }
+        if (s_seq != s_exp_seq) { ack(0); fail(); break; }
         {
             uint32_t remain = s_total - s_recv;
             s_pkt_need = (remain > MT_PKT_MAX) ? MT_PKT_MAX : remain;
         }
-        if (s_pkt_need == 0) { ack(0); s_error = 1; s_st = S_IDLE; break; }
+        if (s_pkt_need == 0) { ack(0); fail(); break; }
         s_st = S_PKT_DATA;
         break;
     case S_PKT_DATA:
@@ -149,7 +164,7 @@ void MusicOta_FeedByte(uint8_t b)
         crc = crc16_modbus(crc, (uint8_t)(s_seq & 0xFF));
         for (uint32_t i = 0; i < s_pkt_len; i++) crc = crc16_modbus(crc, s_pkt[i]);
         if ((uint8_t)(crc >> 8) != s_crchi_tmp || (uint8_t)(crc & 0xFF) != crclo) {
-            ack(0); s_error = 1; s_st = S_IDLE; break;
+            ack(0); fail(); break;
         }
         s_st = S_PKT_55;
         break;
@@ -165,10 +180,9 @@ void MusicOta_FeedByte(uint8_t b)
                 uint32_t left = MusicStore_Write(s_pkt, s_pkt_len);
                 if (left > 0) {
                     memcpy(s_spill, s_pkt + (s_pkt_len - left), left);
-                    s_spill_off = 0; s_spill_len = left; s_ack_pend = 1;
-                } else {
-                    ack(1);
+                    s_spill_off = 0; s_spill_len = left;
                 }
+                s_ack_pend = 1;   /* 本包全部落盘后才补 ACK, 保证 ESP 严格等 ack 发包 */
             }
             s_recv += s_pkt_len;
             s_exp_seq++;
@@ -176,14 +190,14 @@ void MusicOta_FeedByte(uint8_t b)
             g_sys.music_upload_pct = (uint8_t)(s_recv * 100U / s_total);
             s_st = (s_recv >= s_total) ? S_END_AA : S_PKT_AA;
         } else {
-            ack(0); s_error = 1; s_st = S_IDLE;
+            ack(0); fail();
         }
         break;
 
     case S_END_AA: s_st = (b == 0xAA) ? S_END_55 : S_IDLE; break;
     case S_END_55: s_st = (b == 0x55) ? S_END_TYPE : (b == 0xAA ? S_END_AA : S_IDLE); break;
     case S_END_TYPE:
-        if (b != F_END) { ack(0); s_error = 1; s_st = S_IDLE; break; }
+        if (b != F_END) { ack(0); fail(); break; }
         s_crc_expect = 0;
         s_st = S_END_CRC1;
         break;
@@ -219,14 +233,19 @@ void MusicOta_Poll(void)
 {
     MusicStore_Poll();
 
-    /* spill 续写并补发 ACK */
+    /* spill 续写; 本包数据全部落盘(缓冲空且写进度追上)后才补 ACK */
     if (s_ack_pend) {
-        uint32_t left = MusicStore_Write(s_spill + s_spill_off, s_spill_len - s_spill_off);
-        if (left == 0) {
-            s_ack_pend = 0; s_spill_len = 0; s_spill_off = 0;
+        if (s_spill_len > 0) {
+            uint32_t left = MusicStore_Write(s_spill + s_spill_off, s_spill_len - s_spill_off);
+            if (left == 0) {
+                s_spill_len = 0; s_spill_off = 0;
+            } else {
+                s_spill_off = s_spill_len - left;
+            }
+        }
+        if (s_spill_len == 0 && MusicStore_WrittenOff() >= s_recv) {
+            s_ack_pend = 0;
             ack(1);
-        } else {
-            s_spill_off = s_spill_len - left;
         }
     }
 
@@ -234,5 +253,7 @@ void MusicOta_Poll(void)
         MusicStore_AbortUpload();
         leave_active();
         s_error = 1; s_st = S_IDLE;
+        s_ack_pend = 0; s_spill_len = 0;
+        g_sys.music_popup = 5;    /* 下载失败提示 */
     }
 }

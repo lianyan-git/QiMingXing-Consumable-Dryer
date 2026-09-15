@@ -94,4 +94,11 @@ uint8_t NTC_IsOverTemp(void)
     int16_t temp = NTC_GetTemperature();
     return (temp >= (int16_t)(NTC_OVERTEMP_THRESHOLD * 10)) ? 1 : 0;
 }
+
+uint8_t NTC_IsValid(void)
+{
+    int16_t t = NTC_GetTemperature();
+    /* NTC_GetTemperature 异常映射: adc>=4090 → -200(开路) / adc<=10 → 1200(短路) */
+    return (t > (int16_t)-200) && (t < (int16_t)1200);
+}
 #endif

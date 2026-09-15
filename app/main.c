@@ -7,6 +7,7 @@
 #include "system_time.h"
 #include "system_config.h"
 #include "bsp_tft_st7789.h"
+#include "sfud_flash.h"
 
 #ifndef BOOTLOADER_BUILD
 #include "bsp_sht40.h"
@@ -22,11 +23,11 @@
 #include "esp_at.h"
 #include "esp_http_bridge.h"
 #include "esp_link.h"
+#include "bsp_font_store.h"
 #include "can_cluster.h"
 #include "music_play.h"
 #include "music_store.h"
 #include "music_ota.h"
-#include "music_data.h"
 #include "http_server.h"
 #include "ota_http.h"
 #include "ota_metadata_store.h"
@@ -191,50 +192,61 @@ int main(void)
     g_sys.screen_off_timeout = 0;  /* 姒涙款吇娴犲簼?宥??鐏? */
     g_sys.wifi_enabled = 1;
     g_sys.pid_calibrated = 0;
-    System_Init();   /* 娴犲骸?鏍?鈺lash??鐘烘祰瀹歌弓?婵?妯???鏆熼敍?鐟???鏍?妯款吇??纭?澶??婢惰精瑙??娆戞暏姒涙款吇???*/
-    TFT_SetBrightness(g_sys.backlight);
-    theme_apply();
-
-    /* SHT40 濞撯晜绠嶆惔锔?鐘?鐔锋珤??婵?瀣?鏍??鏉烆垯娆I2C閿涘瑽10=SCL / PB11=SDA閿涘??
-     * ??宥??3濞嗏?鏂款嚠娑撳﹦鏁?妞傛惔蹇?娑?婵?瀣?鏍с亼鐠愩儰?宥夋▎婵夌偛鎯?濮╅敍宀?宀勬桨娴犲秵妯夌粈娲?妯款吇??纭??
-     * ?鎳??????read_sensors() ???缂佈呯敾鐏忔繆?鏇☆嚢??鏍??*/
-    {
-        int sht_try;
-        for (sht_try = 0; sht_try < 3; sht_try++) {
-            if (SHT40_Init() == 0) break;
-            { volatile uint32_t d = 0; while (d < 100000U) d++; }
-        }
-    }
-
-    /* PTC/Fan/NTC 鍒濆嬪寲锛堢‖浠跺凡鎺ュソ瀵瑰簲澶栬撅級 */
-    
-    PTC_Init();
-    Fan_Init();
-    NTC_Init();
-    CS1237_Init();
-    { volatile uint32_t d = 0; while (d < 3000000U) d++; }  /* settle ~200ms for stable boot tare */                 /* ??瀣?娑?鐘?鐔??CS1237閿涘湧A0=DOUT閿涘瑼1=SCLK閿?*/
-    RGB_Strip_Init();              /* WS2812 RGB ??顖涙蒋閿涘湧B6=?濮?????顖?瀛瑽7=7妫版?娑樺??顖??*/
-    Stepper_Init();
-    CAN_Cluster_Init();
+    SfudFlash_Init();   /* 外部Flash探测/清写保护(须早于 LangInit; 参数读取后移到有字库分支, 引导页用默认值不熄屏) */
     EspLink_Init();                /* 濮濄儴?娑氭暩?婧 GPIO閿涘湧B12-14閿涘?婵?瀣?鏍?宀?妯款吇娴ｈ儻?鍊?姘?妯兼暩楠????*/
-
-    UI_ShowBootScreen();   /* boot progress screen + sensor read */
-
-    /* 闊充箰锛氬栭儴鍥轰欢瀛樺偍 / 涓婁紶鎺ユ敹 / 鎾鏀撅紙TIM3 鍊熺敤锛 */
-    MusicStore_Init();
-    MusicOta_Init();
-    MusicPlay_Init();
-    UI_DrawMainScreen();        /* ?????澶?妤佹傜紒妯?鏈靛瘜??宀??*/
-    /* ?????澶?鎰?妯瑰瘨鐠у嚖?宀勬苟?鍤娑撹崵?宀勬桨閿?鏉?濞撯冲З?鏁鹃敍? */
-    s_rgb_ready = 1;               /* 涓庡睆骞曟笎浜鍚屾ワ細姝ゅ埢璧风伅鏉℃墠寮鍚鍔ㄦ晥 */
-    {
-        uint16_t b;
-        for (b = 0U; b <= 100U; b += 5U) {
-            TFT_SetBrightness(b);
+    /* 引导语言页: 外部 Flash 无有效字库 → 开 language AP 显示下载页 */
+    if (LangInit() != 0) {
+        g_sys.lang_ap_active = 1;
+        g_sys.current_screen = SCREEN_LANG_LOAD;
+        /* 本分支跳过了正常启动的亮度渐变，需手动点亮背光，否则引导页在全黑下不可见 */
+        TFT_SetBrightness(30);
+        { uint16_t bi; for (bi = 30U; bi <= 100U; bi += 10U) {
+            TFT_SetBrightness(bi);
             Watchdog_Kick();
-            { volatile uint32_t d = 0; while (d < 200000U) d++; }  /* 缁?14ms */
-        }
+            { volatile uint32_t d = 0; while (d < 120000U) d++; }
+        } }
         TFT_SetBrightness(100);
+        EspLink_LangOpenAp();
+        g_sys.ui_force_redraw = 1;   /* 首帧画引导页(SSID/密码/进度/诊断) */
+    }
+    if (!g_sys.lang_ap_active) {
+        /* lang guide page has no fonts: skip param load + sensor init so it never sleeps */
+        System_LoadParams();
+        TFT_SetBrightness(g_sys.backlight);
+        theme_apply();
+        {
+            int sht_try;
+            for (sht_try = 0; sht_try < 3; sht_try++) {
+                if (SHT40_Init() == 0) break;
+                { volatile uint32_t d = 0; while (d < 100000U) d++; }
+            }
+        }
+        PTC_Init();
+        Fan_Init();
+        NTC_Init();
+        CS1237_Init();
+        { volatile uint32_t d = 0; while (d < 3000000U) d++; }
+        RGB_Strip_Init();
+        Stepper_Init();
+        CAN_Cluster_Init();
+        UI_ShowBootScreen();   /* boot progress screen + sensor read */
+    
+        /* 闊充箰锛氬栭儴鍥轰欢瀛樺偍 / 涓婁紶鎺ユ敹 / 鎾鏀撅紙TIM3 鍊熺敤锛 */
+        MusicStore_Init();
+        MusicOta_Init();
+        MusicPlay_Init();
+        UI_DrawMainScreen();        /* ?????澶?妤佹傜紒妯?鏈靛瘜??宀??*/
+        /* ?????澶?鎰?妯瑰瘨鐠у嚖?宀勬苟?鍤娑撹崵?宀勬桨閿?鏉?濞撯冲З?鏁鹃敍? */
+        s_rgb_ready = 1;               /* 涓庡睆骞曟笎浜鍚屾ワ細姝ゅ埢璧风伅鏉℃墠寮鍚鍔ㄦ晥 */
+        {
+            uint16_t b;
+            for (b = 0U; b <= 100U; b += 5U) {
+                TFT_SetBrightness(b);
+                Watchdog_Kick();
+                { volatile uint32_t d = 0; while (d < 200000U) d++; }  /* 缁?14ms */
+            }
+            TFT_SetBrightness(100);
+        }
     }
 
     /* 缂傛牜???娅掗敍娆祅coder_Process ?????銊???????瀣娴/??鏇炲毊閿涘矂鏆??澶?娑?婊?鏇犳暠娑撳鏌?瀚缁斿??濞村??
@@ -245,8 +257,8 @@ int main(void)
         uint8_t  btn_long_done = 0;
         Screen_t btn_press_screen = (Screen_t)0xFF;
         uint8_t  last_sel = 0xFF;
-    uint32_t sensor_tick = 0;
-    for (;;) {
+        uint32_t sensor_tick = 0;
+        for (;;) {
         now = SystemTime_Millis();
         Watchdog_Kick();
         Stepper_Update();
@@ -303,8 +315,11 @@ int main(void)
                 btn_was_down = 0;
             }
 
-    /* sensor safety/control task: 100ms window (faster temp refresh; SHT40 blocks ~16ms) */
-            if ((int32_t)(now - sensor_tick) >= (int32_t)100) {
+    /* sensor safety/control task: 100ms window (faster temp refresh; SHT40 blocks ~16ms)
+             * 仅真正的首启引导页(SCREEN_LANG_LOAD, 外设未初始化)跳过; 设置页弹窗等正常模式
+             * 始终运行——lang_ap_active 残留(语言上传失败等)不得冻结传感器/加热 */
+            if (g_sys.current_screen != SCREEN_LANG_LOAD &&
+                (int32_t)(now - sensor_tick) >= (int32_t)100) {
                 sensor_tick = now;
                 read_sensors();
                 safety_check();
@@ -446,6 +461,11 @@ static void update_rgb(void)
         RGB_AllOff();
         return;
     }
+    /* 音乐播放中: 按音高点亮灯带(中间起步, 越往两侧音越高), 覆盖其他灯效 */
+    if (MusicPlay_IsPlaying()) {
+        RGB_MusicPitch(MusicPlay_CurFreq());
+        return;
+    }
     static uint8_t rgb_tick = 0;
     static uint32_t complete_start = 0;
     rgb_tick++;
@@ -487,7 +507,7 @@ static void trigger_safety(SafetyState_t state)
     g_sys.safety_state = state;
     g_sys.run_state = STATE_IDLE;
     g_sys.drying_active = 0;
-    PTC_SetPower(0);
+    PTC_Disable();
     Fan_SetSpeed(100);
     Stepper_Enable(0);
     Buzzer_Beep(200);
@@ -506,6 +526,7 @@ void StartDrying(void)
     g_sys.temp_stuck_start = SystemTime_Millis();
     g_sys.safety_state = SAFETY_NONE;
     g_sys.chamber_temp_last = g_sys.current_temp;
+    PTC_Enable();       /* 品许加热 */
     PTC_SetPower(100);
     Fan_SetSpeed(100);                       /* 妞嬪孩????鎺?銊?鐔?? */
     if (g_sys.params.motor_enabled) {
@@ -522,7 +543,7 @@ void StopDrying(void)
     g_sys.drying_active = 0;
     g_sys.run_state = STATE_COOLING;
     g_sys.remaining_sec = g_sys.params.dry_time_sec;   /* 鍋滄㈠悗鍓╀綑鏃堕暱褰掓暣涓鸿惧畾鏃堕暱锛岄伩鍏嶇綉椤/鐣岄潰娈嬬暀鍊掕℃椂 */
-    PTC_SetPower(0);
+    PTC_Disable();
     Fan_SetSpeed(100);
     Stepper_Enable(0);
 }
@@ -532,7 +553,7 @@ void PauseDrying(void)
     if (g_sys.run_state != STATE_HEATING && g_sys.run_state != STATE_DRYING) return;
     pid_reset();
     g_sys.run_state = STATE_PAUSED;
-    PTC_SetPower(0);
+    PTC_Disable();
     Fan_SetSpeed(100);
     Stepper_Enable(0);
 }
@@ -547,6 +568,7 @@ void ResumeDrying(void)
     g_sys.run_state = (g_sys.current_temp < (float)g_sys.params.target_temp - 0.5f)
                       ? STATE_HEATING : STATE_DRYING;
     Fan_SetSpeed(100);
+    PTC_Enable();       /* 恢复烘干: 重新许可加热 */
     if (g_sys.params.motor_enabled) {
         Stepper_Enable(1);
         Stepper_SetSpeed(g_sys.params.motor_speed * 200);
@@ -686,15 +708,14 @@ static void control_update(void)
      * ??鎰?瀣?鏇??濞夈劑????鎴炴弓?甯寸圭偤????鐘?顓??閿????濞村娅?妞勭粻陇?钘夋儊濮?鐢鍛?鎾????鏂??
      * ??鍨?? NTC ??顓??鐠囶垵顕(??閿????顒傗敄)鐏忚鲸?? PTC ????鏌囬獮璺鸿剨??濠咁劅鐏炲繈??濞村?鏇?搴?銏?宥??
      * if (g_sys.drying_active && NTC_IsOverTemp()) {
-     *     PTC_SetPower(0);
+     *     PTC_Disable();
      *     trigger_safety(SAFETY_BOX_BROKEN);
      *     return;
      * }
      */
 
-    if (g_sys.safety_state != SAFETY_NONE) { PTC_SetPower(0); return; }
-
-    /* PID 鑷鏁村畾锛氫紭鍏堥┍鍔ㄧ姸鎬佹満锛屽苟鍚屾ヨ繘搴﹀埌 g_sys 渚涚晫闈㈡樉绀猴紙鍘燂細杩囩▼鍑芥暟浠庢湭琚璋冪敤鈫0%锛 */
+    /* PID 自動校準優先: 校準是受控元件加熱測試(內部有 160°C 硬件保護), 不被
+     * safety/NTC 異常誤禁——否則 NTC 異常或 safety 殘留時校准永遠不發熱 */
     if (g_sys.pid_autotune_running) {
         PTC_PID_AutotuneProcess();
         g_sys.pid_autotune_progress = PTC_PID_AutotuneGetProgress();
@@ -707,6 +728,10 @@ static void control_update(void)
         if (PTC_TempPID_AutotuneIsDone()) g_sys.temp_pid_running = 0;
         return;
     }
+
+    if (g_sys.safety_state != SAFETY_NONE) { PTC_Disable(); return; }
+    /* NTC 开路/短路等异常值: 不管哪个状态都禁止加热 */
+    if (g_sys.drying_active && !NTC_IsValid()) { PTC_Disable(); }
 
     switch (g_sys.run_state) {
     case STATE_HEATING:
@@ -762,11 +787,11 @@ static void control_update(void)
         if (g_sys.ptc_temp <= (float)g_sys.params.ptc_cooling_temp) { g_sys.run_state = STATE_COMPLETE; Fan_Off(); }
         break;
     case STATE_PAUSED:
-        PTC_SetPower(0);
+        PTC_Disable();
         break;
     default:
         /* 缁屾椽妫/鐎瑰本?鎰濮???閿涙碍??缂侇厽淇鎼达箑?澶?銊?鏂?鏂垮涧濡?濞?NTC 鐡?鏉???宄板祱濞撯晛瀹 */
-        PTC_SetPower(0);
+        PTC_Disable();
         if (g_sys.ptc_temp > (float)g_sys.params.ptc_cooling_temp) {
             Fan_SetSpeed(100);
         } else {

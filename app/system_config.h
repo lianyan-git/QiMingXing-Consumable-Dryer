@@ -57,6 +57,7 @@ typedef enum {
     SCREEN_CAN,
     SCREEN_MUSIC,        /* 音乐主页面（上传音乐 / 音乐列表 / 退出） */
     SCREEN_MUSIC_LIST,   /* 音乐列表（自适应滚动，含播放中进度与长名跑马灯） */
+    SCREEN_LANG_LOAD,    /* 语言字库引导下载页 */
 } Screen_t;
 
 typedef enum {
@@ -101,6 +102,7 @@ typedef struct {
 } Preset_t;
 
 typedef struct {
+    uint8_t  language;       /* 界面语言 0=English 1=中文 */
     uint16_t target_temp;
     uint32_t dry_time_sec;
     uint16_t ptc_max_temp;
@@ -221,6 +223,12 @@ typedef struct {
     uint8_t can_search_cnt0;  /* 搜索开始时的已连接数(命中检测用) */
     uint32_t can_search_t0;   /* 状态进入时间(ms) */
     uint32_t can_search_last; /* 搜索中最近一次广播时间(ms) */
+    uint8_t lang_ap_active;     /* 语言 AP 下载进行中(引导页/设置入口) */
+    uint8_t lang_download_done; /* 语言字库下载完成(需重启生效) */
+    uint8_t lang_upload_pct;    /* 语言字库上传进度 0-100 */
+    uint8_t lang_upload_stage;  /* 0=idle 1=WAIT-HAND 2=RECEIVING 3=DONE */
+    uint8_t lang_from_settings; /* 1=设置页手动进入(空闲可单击退出, 传输中锁定) */
+    uint8_t lang_popup;        /* 语言字库上传弹窗态(设置页): 0=无 1=待开AP 2=AP已开/等待上传 3=上传中 4=完成 5=失败 */
     uint8_t wifi_edit_active; /* WiFi开关编辑态: 0=选行 1=选中待确认(再单击退出才生效) */
     uint8_t wifi_edit_orig;   /* 进入WiFi开关编辑态时的原状态，退出时比较决定是否切换ESP */
     uint8_t ui_force_redraw;  /* 外部(网页命令等)请求整屏重绘的标志，UI_Update 消费后清零 */

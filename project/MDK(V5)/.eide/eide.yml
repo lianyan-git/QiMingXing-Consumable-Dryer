@@ -60,11 +60,10 @@ virtualFolder:
         - path: ../../module/can_cluster.h
         - path: ../../module/music_fw.c
         - path: ../../module/music_format.h
-        - path: ../../module/music_data.c
-        - path: ../../module/music_data.h
         - path: ../../module/music_store.c
         - path: ../../module/music_store.h
         - path: ../../module/music_ota.c
+        - path: ../../module/lang_ota.c
         - path: ../../module/music_ota.h
         - path: ../../module/music_play.c
         - path: ../../module/music_play.h
@@ -117,6 +116,7 @@ virtualFolder:
         - path: ../../bsp/bsp_ntc.c
         - path: ../../bsp/bsp_ntc.h
         - path: ../../bsp/bsp_ptc.c
+        - path: ../../bsp/bsp_font_store.c
         - path: ../../bsp/bsp_ptc.h
         - path: ../../bsp/bsp_rgb_led.c
         - path: ../../bsp/bsp_rgb_led.h
@@ -218,9 +218,9 @@ targets:
               abortAfterFailed: true
               command: mkdir ${KEIL_OUTPUT_DIR} & copy "${OutDir}\${ProjectName}.axf" "${KEIL_OUTPUT_DIR}\${KEIL_OUTPUT_NAME}.axf"
               disable: false
-            - name: fromelf.exe --bin --output ".\Objects\APP\dryer_app.bin" ".\Objects\APP\dryer_app.axf"
+            - name: fromelf.exe --bin --output ".\Objects\Bootloader\dryer_bootloader.bin" ".\Objects\Bootloader\dryer_bootloader.axf"
               abortAfterFailed: true
-              command: fromelf.exe --bin --output ".\Objects\APP\dryer_app.bin" ".\Objects\APP\dryer_app.axf"
+              command: fromelf.exe --bin --output ".\Objects\Bootloader\dryer_bootloader.bin" ".\Objects\Bootloader\dryer_bootloader.axf"
               disable: false
           asm-compiler: {}
           beforeBuildTasks: []
@@ -230,14 +230,14 @@ targets:
             c99-mode: true
             gnu-extensions: true
             one-elf-section-per-function: true
-            optimization: level-0
+            optimization: level-1
             warnings: all-warnings
           global:
             output-debug-info: enable
             use-microLIB: true
           linker:
             output-format: elf
-            ro-base: "0x08003400"
+            ro-base: "0x08000000"
             rw-base: "0x20000000"
         scatterFilePath: ""
         storageLayout:
@@ -359,6 +359,7 @@ targets:
       - <virtual_root>/BSP/bsp_fan.c
       - <virtual_root>/BSP/bsp_stepper.c
       - <virtual_root>/BSP/bsp_ptc.c
+      - <virtual_root>/BSP/bsp_font_store.c
       - <virtual_root>/BSP/bsp_ntc.c
       - <virtual_root>/Module/http_server.c
       - <virtual_root>/Module/esp_at.c
@@ -366,10 +367,10 @@ targets:
       - <virtual_root>/Module/esp_link.c
       - <virtual_root>/Module/can_cluster.c
       - <virtual_root>/Module/music_fw.c
-      - <virtual_root>/Module/music_data.c
       - <virtual_root>/Module/music_store.c
       - <virtual_root>/Module/music_ota.c
       - <virtual_root>/Module/music_play.c
+      - <virtual_root>/Module/lang_ota.c
       - <virtual_root>/Module/ota_upload.c
       - <virtual_root>/Module/ota_http.c
       - <virtual_root>/Module/ota_update_controller.c
@@ -512,6 +513,7 @@ targets:
       incList:
         - .
         - ../../module
+        - ../../bsp
       libList: []
     excludeList:
       - <virtual_root>/BSP/bsp_sht40.c
@@ -524,6 +526,7 @@ targets:
       - <virtual_root>/BSP/bsp_internal_flash_stm32.c
       - <virtual_root>/BSP/bsp_ntc.c
       - <virtual_root>/BSP/bsp_ptc.c
+      - <virtual_root>/BSP/bsp_font_store.c
       - <virtual_root>/BSP/bsp_rgb_led.c
       - <virtual_root>/BSP/bsp_spi1_bus.c
       - <virtual_root>/BSP/bsp_stepper.c
@@ -549,10 +552,10 @@ targets:
       - <virtual_root>/Module/mod_web_server.c
       - <virtual_root>/Module/mod_wifi_config.c
       - <virtual_root>/Module/mod_wifi_manager.c
-      - <virtual_root>/Module/music_data.c
       - <virtual_root>/Module/music_ota.c
       - <virtual_root>/Module/music_play.c
       - <virtual_root>/Module/music_store.c
+      - <virtual_root>/Module/lang_ota.c
       - <virtual_root>/Module/ota_boot_request_store.c
       - <virtual_root>/Module/ota_display.c
       - <virtual_root>/Module/ota_http.c
@@ -615,7 +618,7 @@ targets:
             c99-mode: true
             gnu-extensions: true
             one-elf-section-per-function: true
-            optimization: level-0
+            optimization: level-1
             warnings: all-warnings
           global:
             output-debug-info: enable

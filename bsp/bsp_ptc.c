@@ -8,6 +8,10 @@
 #include "system_time.h"
 #include "stm32f10x.h"
 
+/* 加热许可: 0=禁止(PTC_SetPower 被强制为0输出) 1=允许
+ * 防止任何路径不经许可直接调 PTC_SetPower(>0) 就加热 */
+static uint8_t ptc_permit = 0;
+static uint8_t ptc_engaged = 0;   /* PA8 是否已切到 TIM1_CH1 PWM(AF) */
 static uint8_t autotune_running = 0;
 static uint8_t autotune_done = 0;
 static uint8_t autotune_progress = 0;
@@ -31,11 +35,6 @@ void PTC_Init(void)
     GPIO_Init(PIN_PTC_PWM_PORT, &g);
     GPIO_ResetBits(PIN_PTC_PWM_PORT, PIN_PTC_PWM_PIN);
 
-    g.GPIO_Pin = PIN_PTC_PWM_PIN;
-    g.GPIO_Mode = GPIO_Mode_AF_PP;
-    g.GPIO_Speed = GPIO_Speed_50MHz;
-    GPIO_Init(PIN_PTC_PWM_PORT, &g);
-
     TIM_TimeBaseInitTypeDef t;
     t.TIM_Prescaler = 71;
     t.TIM_Period = 999;
@@ -57,13 +56,51 @@ void PTC_Init(void)
     TIM_Cmd(PTC_PWM_TIM, ENABLE);
     TIM_SetCompare1(PTC_PWM_TIM, 0);                        /* 保险: CCR1 清零(关预装载后直接生效) */
     TIM_GenerateEvent(PTC_PWM_TIM, TIM_EventSource_Update); /* 同步影子寄存器, 输出立即拉低 */
+    ptc_permit = 0;                                        /* 默认禁止加热 */
+    ptc_engaged = 0;                                       /* PA8 保持 GPIO 推推低(物理关), 未切 PWM */
+    /* 注: TIM1 时基/CH1 已配置且 MOE/Cmd 已开(风扇 TIM1_CH4 依赖), 但 PA8 未切 AF
+     * → 引导期 PA8 = GPIO 推推引脚高低(外部上拉也拉不高), 加热器物理关闭 */
     PTC_SetPower(0);                                        /* 上电默认关闭加热 */
 
 }
 
+
+void PTC_Enable(void)
+{
+    ptc_permit = 1;
+}
+
+/* 切换 PA8 到 TIM1_CH1 PWM 复用(任何 >0% 输出前执行) */
+static void ptc_engage(void)
+{
+    if (ptc_engaged) return;
+    {
+        GPIO_InitTypeDef g;
+        g.GPIO_Pin = PIN_PTC_PWM_PIN;
+        g.GPIO_Mode = GPIO_Mode_AF_PP;
+        g.GPIO_Speed = GPIO_Speed_50MHz;
+        GPIO_Init(PIN_PTC_PWM_PORT, &g);
+    }
+    TIM_SetCompare1(PTC_PWM_TIM, 0);   /* 先钳低, 避免切换瞬间残留高 */
+    ptc_engaged = 1;
+}
+
+void PTC_Disable(void)
+{
+    ptc_permit = 0;
+    if (ptc_engaged) TIM_SetCompare1(PTC_PWM_TIM, 0);   /* 立即关断(PWM 恒低) */
+}
+
 void PTC_SetPower(uint8_t percent)
 {
+    if (!ptc_permit) percent = 0;   /* 无许可: 强制0 */
     if (percent > 100) percent = 100;
+    if (percent == 0) {
+        /* 0%: 未 engage → PA8 是 GPIO 推推低(物理关); 已 engage → CCR 清零(PWM 恒低) */
+        if (ptc_engaged) TIM_SetCompare1(PTC_PWM_TIM, 0);
+        return;
+    }
+    ptc_engage();
     TIM_SetCompare1(PTC_PWM_TIM, (percent * 1000) / 100);
 }
 
@@ -134,6 +171,7 @@ autotune_running = 1;
     at_rising = 0; at_have_trough = 0; at_last_peak_time = 0;
     at_stage = 0; at_meas_cnt = 0; at_sum_period = 0; at_sum_amp = 0; at_hold_ms = 0;
 
+    PTC_Enable();
     Fan_SetSpeed(fan_pct);
     PTC_SetPower(100);
 }
@@ -155,7 +193,7 @@ uint8_t PTC_PID_AutotuneProcess(void)
             System_RequestSave();
         }
         autotune_done = 1; autotune_running = 0; autotune_progress = 100;
-        PTC_SetPower(0); Fan_SetSpeed(0);
+        PTC_Disable(); Fan_SetSpeed(0);
         return 1;
     }
 
@@ -264,7 +302,7 @@ uint8_t PTC_PID_AutotuneProcess(void)
             g_sys.pid_calibrated = 1;
             System_RequestSave();
         }
-        PTC_SetPower(0);
+        PTC_Disable();
         Fan_SetSpeed(0);
         autotune_done = 1;
         autotune_running = 0;
@@ -318,6 +356,7 @@ void PTC_TempPID_AutotuneStart(float target_temp)
     tp_rising = 0; tp_have_trough = 0; tp_last_peak_time = 0;
     tp_stage = 0; tp_meas_cnt = 0; tp_sum_period = 0; tp_sum_amp = 0; tp_hold_ms = 0;
 
+    PTC_Enable();
     Fan_SetSpeed(100);
     PTC_SetPower(100);
 }
@@ -361,7 +400,7 @@ uint8_t PTC_TempPID_AutotuneProcess(void)
                 System_RequestSave();
             }
             temp_pid_done = 1; temp_pid_running = 0; temp_pid_progress = 100;
-            PTC_SetPower(0); Fan_SetSpeed(0);
+            PTC_Disable(); Fan_SetSpeed(0);
             return 1;
         }
 
@@ -469,7 +508,7 @@ uint8_t PTC_TempPID_AutotuneProcess(void)
                 g_sys.pid_calibrated = 1;
                 System_RequestSave();
             }
-            PTC_SetPower(0);
+            PTC_Disable();
             Fan_SetSpeed(0);
             temp_pid_done = 1;
             temp_pid_running = 0;

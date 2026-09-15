@@ -160,6 +160,35 @@ void RGB_Progress_ColorWheel(uint8_t pos)
     RGB_Strip3_SetPixels(data, 7);
 }
 
+/* 音乐播放音高灯效：7 颗进度灯，中间第4颗(i=3)为基准点亮；
+ * 音越高向两侧对称扩展，并随音高从蓝向橙红过渡（呼吸亮度）。
+ * freq=0(休止) 保持只亮中间一颗。 */
+void RGB_MusicPitch(uint16_t freq)
+{
+    uint8_t data[21];
+    uint8_t lvl, i, r, g, b;
+    uint8_t bri = breath_brightness();
+    uint8_t hue;
+    if (freq < 220U)      lvl = 0;
+    else if (freq < 440U) lvl = 1;
+    else if (freq < 880U) lvl = 2;
+    else                  lvl = 3;
+    hue = (uint8_t)(160U - (uint16_t)lvl * 40U);   /* 160蓝 → 120青 → 80绿 → 40橙 */
+    hsv_to_rgb(hue, &r, &g, &b);
+    for (i = 0; i < 7; i++) {
+        int16_t dist = (int16_t)i - 3;
+        if (dist < 0) dist = -dist;
+        if ((uint8_t)dist <= lvl) {
+            data[i*3]   = (uint8_t)((uint16_t)(g>>2) * bri / 64U);
+            data[i*3+1] = (uint8_t)((uint16_t)(r>>2) * bri / 64U);
+            data[i*3+2] = (uint8_t)((uint16_t)(b>>2) * bri / 64U);
+        } else {
+            data[i*3]=0; data[i*3+1]=0; data[i*3+2]=0;
+        }
+    }
+    RGB_Strip3_SetPixels(data, 7);
+}
+
 static uint8_t breath_hue = 0;   /* 彩色循环相位（呼吸循环色） */
 
 void RGB_Progress_DryingBar(uint8_t percent)

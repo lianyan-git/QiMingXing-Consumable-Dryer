@@ -16,7 +16,6 @@ virtualFolder:
     - name: Entry
       files:
         - path: ../../bootloader/boot_main.c
-        - path: ../../app/main.c
       folders: []
     - name: Startup
       files:
@@ -25,54 +24,19 @@ virtualFolder:
     - name: Board
       files:
         - path: ../../board/board.c
-        - path: ../../board/board.h
-        - path: ../../board/pin_config.h
-        - path: ../../board/resource_config.h
       folders: []
     - name: Module
       files:
-        - path: ../../app/ui_manager.c
-        - path: ../../app/system_config.c
         - path: ../../module/system_time.c
         - path: ../../module/stm32f10x_it.c
         - path: ../../module/ota_display.c
         - path: ../../module/ota_metadata_store.c
         - path: ../../module/ota_boot_request_store.c
         - path: ../../module/ota_staging.c
-        - path: ../../module/esp_at.c
-        - path: ../../module/esp_at.h
-        - path: ../../module/esp_http_bridge.c
-        - path: ../../module/esp_http_bridge.h
-        - path: ../../module/http_server.c
-        - path: ../../module/http_server.h
-        - path: ../../module/mod_littlefs.h
-        - path: ../../module/mod_ota.c
-        - path: ../../module/mod_ota.h
-        - path: ../../module/mod_web_server.c
-        - path: ../../module/mod_web_server.h
-        - path: ../../module/mod_wifi_config.c
-        - path: ../../module/mod_wifi_config.h
-        - path: ../../module/mod_wifi_manager.c
-        - path: ../../module/mod_wifi_manager.h
-        - path: ../../module/ota_boot_request_store.h
-        - path: ../../module/ota_display.h
-        - path: ../../module/ota_http.c
-        - path: ../../module/ota_http.h
-        - path: ../../module/ota_metadata_store.h
-        - path: ../../module/ota_staging.h
-        - path: ../../module/ota_update_controller.c
-        - path: ../../module/ota_update_controller.h
-        - path: ../../module/ota_upload.c
-        - path: ../../module/ota_upload.h
-        - path: ../../module/stm32f10x_conf.h
-        - path: ../../module/stm32f10x_it.h
-        - path: ../../module/system_time.h
       folders: []
     - name: Shared
       files:
         - path: ../../shared/ota_contract.c
-        - path: ../../shared/ota_contract.h
-        - path: ../../shared/platform_contract.h
       folders: []
     - name: BSP
       files:
@@ -81,38 +45,6 @@ virtualFolder:
         - path: ../../bsp/bsp_tft_st7789.c
         - path: ../../bsp/bsp_tft_port_stm32.c
         - path: ../../bsp/bsp_internal_flash_stm32.c
-        - path: ../../bsp/bsp_aht20.h
-        - path: ../../bsp/bsp_buzzer.h
-        - path: ../../bsp/bsp_can.h
-        - path: ../../bsp/bsp_cs1237.h
-        - path: ../../bsp/bsp_aht20.c
-        - path: ../../bsp/bsp_aht20.h
-        - path: ../../bsp/bsp_buzzer.c
-        - path: ../../bsp/bsp_buzzer.h
-        - path: ../../bsp/bsp_can.h
-        - path: ../../bsp/bsp_cs1237.c
-        - path: ../../bsp/bsp_cs1237.h
-        - path: ../../bsp/bsp_encoder.c
-        - path: ../../bsp/bsp_encoder.h
-        - path: ../../bsp/bsp_esp_uart.h
-        - path: ../../bsp/bsp_esp_uart_stm32.c
-        - path: ../../bsp/bsp_fan.c
-        - path: ../../bsp/bsp_fan.h
-        - path: ../../bsp/bsp_internal_flash.h
-        - path: ../../bsp/bsp_ntc.c
-        - path: ../../bsp/bsp_ntc.h
-        - path: ../../bsp/bsp_ptc.c
-        - path: ../../bsp/bsp_ptc.h
-        - path: ../../bsp/bsp_rgb_led.c
-        - path: ../../bsp/bsp_rgb_led.h
-        - path: ../../bsp/bsp_spi1_bus.h
-        - path: ../../bsp/bsp_stepper.c
-        - path: ../../bsp/bsp_stepper.h
-        - path: ../../bsp/bsp_system_reset.h
-        - path: ../../bsp/bsp_system_reset_stm32.c
-        - path: ../../bsp/bsp_tft_port.h
-        - path: ../../bsp/bsp_tft_st7789.h
-        - path: ../../bsp/bsp_w25q128.h
       folders: []
     - name: StdPeriph
       files:
@@ -122,23 +54,6 @@ virtualFolder:
         - path: ../../libraries/STM32F10x_StdPeriph_Driver/src/stm32f10x_iwdg.c
         - path: ../../libraries/STM32F10x_StdPeriph_Driver/src/stm32f10x_spi.c
         - path: ../../libraries/STM32F10x_StdPeriph_Driver/src/stm32f10x_flash.c
-        - path: ../../libraries/STM32F10x_StdPeriph_Driver/src/stm32f10x_adc.c
-        - path: ../../libraries/STM32F10x_StdPeriph_Driver/src/stm32f10x_bkp.c
-        - path: ../../libraries/STM32F10x_StdPeriph_Driver/src/stm32f10x_can.c
-        - path: ../../libraries/STM32F10x_StdPeriph_Driver/src/stm32f10x_cec.c
-        - path: ../../libraries/STM32F10x_StdPeriph_Driver/src/stm32f10x_crc.c
-        - path: ../../libraries/STM32F10x_StdPeriph_Driver/src/stm32f10x_dac.c
-        - path: ../../libraries/STM32F10x_StdPeriph_Driver/src/stm32f10x_dbgmcu.c
-        - path: ../../libraries/STM32F10x_StdPeriph_Driver/src/stm32f10x_dma.c
-        - path: ../../libraries/STM32F10x_StdPeriph_Driver/src/stm32f10x_exti.c
-        - path: ../../libraries/STM32F10x_StdPeriph_Driver/src/stm32f10x_fsmc.c
-        - path: ../../libraries/STM32F10x_StdPeriph_Driver/src/stm32f10x_i2c.c
-        - path: ../../libraries/STM32F10x_StdPeriph_Driver/src/stm32f10x_pwr.c
-        - path: ../../libraries/STM32F10x_StdPeriph_Driver/src/stm32f10x_rtc.c
-        - path: ../../libraries/STM32F10x_StdPeriph_Driver/src/stm32f10x_sdio.c
-        - path: ../../libraries/STM32F10x_StdPeriph_Driver/src/stm32f10x_tim.c
-        - path: ../../libraries/STM32F10x_StdPeriph_Driver/src/stm32f10x_usart.c
-        - path: ../../libraries/STM32F10x_StdPeriph_Driver/src/stm32f10x_wwdg.c
       folders: []
     - name: Bootloader
       files:
@@ -146,22 +61,6 @@ virtualFolder:
         - path: ../../bootloader/boot_jump.c
         - path: ../../bootloader/boot_recovery.c
         - path: ../../bootloader/boot_platform_stm32.c
-        - path: ../../bootloader/bl_esp01s.c
-        - path: ../../bootloader/bl_esp01s.h
-        - path: ../../bootloader/bl_main.c
-        - path: ../../bootloader/bl_main.h
-        - path: ../../bootloader/bl_tft.c
-        - path: ../../bootloader/bl_tft.h
-        - path: ../../bootloader/boot_jump.h
-        - path: ../../bootloader/boot_main.c
-        - path: ../../bootloader/boot_platform.h
-        - path: ../../bootloader/boot_recovery.h
-        - path: ../../bootloader/boot_updater.h
-        - path: ../../bootloader/flash_ops.c
-        - path: ../../bootloader/flash_ops.h
-        - path: ../../bootloader/shared_defs.h
-        - path: ../../bootloader/upgrade_flag.c
-        - path: ../../bootloader/upgrade_flag.h
       folders: []
 dependenceList: []
 outDir: build
@@ -173,9 +72,8 @@ targets:
       defineList:
         - STM32F10X_MD
         - USE_STDPERIPH_DRIVER
-        - VECT_TAB_OFFSET=0x3400
+        - music
       incList:
-        - .
         - ../../app
         - ../../board
         - ../../bootloader
@@ -226,7 +124,7 @@ targets:
             $outputTaskExcludes:
               - .bin
             output-format: elf
-            ro-base: "0x08003400"
+            ro-base: "0x08008800"
             rw-base: "0x20000000"
             xo-base: ""
         scatterFilePath: ""
@@ -293,8 +191,8 @@ targets:
               isChecked: true
               isStartup: true
               mem:
-                size: "0x0001CC00"
-                startAddr: "0x08003400"
+                size: "0x00007800"
+                startAddr: "0x08008800"
               tag: IROM
             - id: 2
               isChecked: false
@@ -340,26 +238,7 @@ targets:
         - .cmsis/include
         - RTE/_Bootloader
       libList: []
-    excludeList:
-      - ../../app/ui_manager.c
-      - ../../app/system_config.c
-      - ../../bsp/bsp_encoder.c
-      - ../../bsp/bsp_fan.c
-      - ../../bsp/bsp_stepper.c
-      - ../../bsp/bsp_ptc.c
-      - ../../bsp/bsp_ntc.c
-      - ../../module/http_server.c
-      - ../../module/esp_at.c
-      - ../../module/esp_http_bridge.c
-      - ../../module/ota_upload.c
-      - ../../module/ota_http.c
-      - ../../module/ota_update_controller.c
-      - ../../module/mod_wifi_manager.c
-      - ../../module/mod_web_server.c
-      - ../../module/mod_ota.c
-      - ../../module/mod_wifi_config.c
-      - ../../libraries/STM32F10x_StdPeriph_Driver/src/stm32f10x_adc.c
-      - ../../app/main.c
+    excludeList: []
     settings:
       debugger: cortex-debug
     toolchain: AC5
@@ -464,7 +343,7 @@ targets:
               isChecked: true
               isStartup: true
               mem:
-                size: "0x00004000"
+                size: "0x00008000"
                 startAddr: "0x08000000"
               tag: IROM
             - id: 2

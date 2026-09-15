@@ -28,6 +28,7 @@ void   MusicStore_Init(void);          /* 读取全局头；有有效固件则�
 int    MusicStore_HasFirmware(void);
 int    MusicStore_BeginUpload(uint32_t size);
 uint32_t MusicStore_Write(const uint8_t *buf, uint32_t len);  /* 返回未吸收字节数(>0 时调用方应 Poll 后再续) */
+uint32_t MusicStore_WrittenOff(void);                         /* 已落盘字节数(相对数据区), 供 ACK 时序判断 */
 int    MusicStore_Finish(uint32_t crc32, uint32_t size);         /* 0=ok */
 void   MusicStore_AbortUpload(void);
 void   MusicStore_Poll(void);          /* 每主循环调用推进落盘 */
@@ -39,6 +40,8 @@ int      MusicStore_GetName(uint16_t idx, char *buf, uint16_t buflen);  /* 含2�
 int      MusicStore_GetNote(uint16_t track, uint32_t k, uint16_t *freq, uint16_t *dur);
 
 void MusicStore_Wipe(void);   /* 擦除全局头扇区=清空音乐列表(长按音乐列表触发) */
-void MusicStore_PrepareWipe(void);  /* pre-erase old firmware area (header + old data sectors) at upload session start */
+void MusicStore_PrepareWipe(void);
+int  MusicStore_WipeForSize(uint32_t size);   /* 握手后擦净: 头+所需数据扇区, 擦完再 ACK(与OTA一致) */
+int  MusicStore_WipeForSize(uint32_t size);   /* 握手后擦净: 头+所需数据扇区, 擦完再 ACK(与OTA一致) */  /* pre-erase old firmware area (header + old data sectors) at upload session start */
 
 #endif /* MUSIC_STORE_H */

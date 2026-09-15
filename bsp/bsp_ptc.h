@@ -6,6 +6,11 @@
 void PTC_Init(void);
 void PTC_SetPower(uint8_t percent);
 
+/* 加热许可：默认禁止加热，仅 PTC_Enable() 后 PTC_SetPower 才有效。
+ * 主动烘干开始/自整定启动时 Enable，停止/暂停/空闲/异常显 Disable 立即断开。 */
+void PTC_Enable(void);
+void PTC_Disable(void);
+
 void PTC_PID_AutotuneStart(void);
 void PTC_PID_AutotuneStartWithFan(uint8_t fan_pct);
 uint8_t PTC_PID_AutotuneProcess(void);
