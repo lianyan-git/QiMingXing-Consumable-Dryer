@@ -45,7 +45,7 @@
             <NotGenerated>0</NotGenerated>
             <InvalidFlash>0</InvalidFlash>
           </TargetStatus>
-          <OutputDirectory>.\Objects\Bootloader\</OutputDirectory>
+          <OutputDirectory>.\build\Bootloader\</OutputDirectory>
           <OutputName>dryer_bootloader</OutputName>
           <CreateExecutable>1</CreateExecutable>
           <CreateLib>0</CreateLib>
@@ -79,7 +79,7 @@
           <AfterMake>
             <RunUserProg1>1</RunUserProg1>
             <RunUserProg2>0</RunUserProg2>
-            <UserProg1Name>fromelf.exe --bin --output ".\Objects\Bootloader\dryer_bootloader.bin" ".\Objects\Bootloader\dryer_bootloader.axf"</UserProg1Name>
+            <UserProg1Name>fromelf.exe --bin --output ".\build\Bootloader\dryer_bootloader.bin" ".\build\Bootloader\dryer_bootloader.axf"</UserProg1Name>
             <UserProg2Name />
             <UserProg1Dos16Mode>0</UserProg1Dos16Mode>
             <UserProg2Dos16Mode>0</UserProg2Dos16Mode>
@@ -612,7 +612,7 @@
             <NotGenerated>0</NotGenerated>
             <InvalidFlash>0</InvalidFlash>
           </TargetStatus>
-          <OutputDirectory>.\Objects\APP\</OutputDirectory>
+          <OutputDirectory>.\build\APP\</OutputDirectory>
           <OutputName>dryer_app</OutputName>
           <CreateExecutable>1</CreateExecutable>
           <CreateLib>0</CreateLib>
@@ -646,7 +646,7 @@
           <AfterMake>
             <RunUserProg1>1</RunUserProg1>
             <RunUserProg2>0</RunUserProg2>
-            <UserProg1Name>fromelf.exe --bin --output ".\Objects\APP\dryer_app.bin" ".\Objects\APP\dryer_app.axf"</UserProg1Name>
+            <UserProg1Name>fromelf.exe --bin --output ".\build\APP\dryer_app.bin" ".\build\APP\dryer_app.axf"</UserProg1Name>
             <UserProg2Name />
             <UserProg1Dos16Mode>0</UserProg1Dos16Mode>
             <UserProg2Dos16Mode>0</UserProg2Dos16Mode>

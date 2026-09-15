@@ -528,7 +528,8 @@ void StartDrying(void)
     g_sys.chamber_temp_last = g_sys.current_temp;
     PTC_Enable();       /* 品许加热 */
     PTC_SetPower(100);
-    Fan_SetSpeed(100);                       /* 妞嬪孩????鎺?銊?鐔?? */
+    PtcDiag_Snap(0, 0xFF, 0xFF, 0xFF);   /* 临时诊断: StartDrying 后快照 */
+    Fan_SetSpeed(100);                       /* 妞嬪孩?????銊?鐔?? */
     if (g_sys.params.motor_enabled) {
         Stepper_Enable(1);
         Stepper_SetSpeed(g_sys.params.motor_speed * 200);
@@ -756,6 +757,7 @@ static void control_update(void)
              * 锛堟姉绉鍒嗛ケ鍜屽悗鐨勬畫浣欑儹鎯鎬ф粦琛屽厹搴曪紝闃叉"蹇鍒扮┖姘旂洰鏍囧嵈鐑у埌95鈩+"锛 */
             if (g_sys.ptc_temp > (float)g_sys.params.ptc_max_temp + 10.0f) pwr = 0U;
             PTC_SetPower(pwr);
+            PtcDiag_Snap(2, p_air, p_ntc, pwr);   /* 临时诊断: 每轮 control_update 后 PTC_SetPower 快照 */
         }
 
         if (g_sys.run_state == STATE_HEATING && g_sys.current_temp >= target - 0.5f) {

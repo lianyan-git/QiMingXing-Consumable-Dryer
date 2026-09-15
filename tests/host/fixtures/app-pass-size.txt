@@ -1,2 +1,0 @@
-Target: APP
-Program Size: Code=4096 RO-data=256 RW-data=64 ZI-data=1024

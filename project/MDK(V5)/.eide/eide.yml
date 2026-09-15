@@ -214,13 +214,9 @@ targets:
         options:
           version: 4
           afterBuildTasks:
-            - name: "[Copy linker output for Keil User Commands]"
+            - name: output dryer_app.bin
               abortAfterFailed: true
-              command: mkdir ${KEIL_OUTPUT_DIR} & copy "${OutDir}\${ProjectName}.axf" "${KEIL_OUTPUT_DIR}\${KEIL_OUTPUT_NAME}.axf"
-              disable: false
-            - name: fromelf.exe --bin --output ".\Objects\Bootloader\dryer_bootloader.bin" ".\Objects\Bootloader\dryer_bootloader.axf"
-              abortAfterFailed: true
-              command: fromelf.exe --bin --output ".\Objects\Bootloader\dryer_bootloader.bin" ".\Objects\Bootloader\dryer_bootloader.axf"
+              command: fromelf.exe --bin --output ".\build\APP\dryer_app.bin" ".\build\APP\Project.axf"
               disable: false
           asm-compiler: {}
           beforeBuildTasks: []
@@ -391,13 +387,9 @@ targets:
         options:
           version: 4
           afterBuildTasks:
-            - name: "[Copy linker output for Keil User Commands]"
+            - name: output dryer_bootloader.bin
               abortAfterFailed: true
-              command: mkdir ${KEIL_OUTPUT_DIR} & copy "${OutDir}\${ProjectName}.axf" "${KEIL_OUTPUT_DIR}\${KEIL_OUTPUT_NAME}.axf"
-              disable: false
-            - name: fromelf.exe --bin --output ".\Objects\Bootloader\dryer_bootloader.bin" ".\Objects\Bootloader\dryer_bootloader.axf"
-              abortAfterFailed: true
-              command: fromelf.exe --bin --output ".\Objects\Bootloader\dryer_bootloader.bin" ".\Objects\Bootloader\dryer_bootloader.axf"
+              command: fromelf.exe --bin --output ".\build\Bootloader\dryer_bootloader.bin" ".\build\Bootloader\Project.axf"
               disable: false
           asm-compiler: {}
           beforeBuildTasks: []
@@ -605,9 +597,9 @@ targets:
         options:
           version: 4
           afterBuildTasks:
-            - name: "[Music] save bin to Objects"
+            - name: output Music.bin
               abortAfterFailed: true
-              command: mkdir "${KEIL_OUTPUT_DIR}" & copy /Y "${OutDir}\Project.bin" "${KEIL_OUTPUT_DIR}\Music.bin"
+              command: fromelf.exe --bin --output ".\build\Music\Music.bin" ".\build\Music\Project.axf"
               disable: false
           asm-compiler:
             defines: []

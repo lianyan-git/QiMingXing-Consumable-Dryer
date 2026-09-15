@@ -10,6 +10,7 @@
 #include "sfud_flash.h"
 #include "system_config.h"
 #include "system_time.h"
+#include "board.h"       /* Watchdog_Kick */
 #include <string.h>
 
 #define MUSIC_SECTOR_SIZE  UINT32_C(0x1000)
@@ -49,6 +50,7 @@ static uint32_t s_up_crc    = 0xFFFFFFFFUL;
 static uint8_t  s_pre_active = 0;
 static uint8_t  s_pre_total  = 0;
 static uint8_t  s_pre_cur    = 0;
+static uint32_t s_eraised_upto = 0;   /* 已(预)擦 data 扇区高水位: 扇区[0..s_eraised_upto-1] 已擦; 0=无 */
 
 static uint32_t g_hdr_chk(const MusicGlobalHdr_t *h)
 {
@@ -74,6 +76,7 @@ static int flash_wait_idle(void)
     uint8_t sr1;
     uint32_t t0 = SystemTime_Millis();
     for (;;) {
+        Watchdog_Kick();
         if (SfudFlash_ReadSR1(&sr1) == 0 && !(sr1 & 0x01U)) return 0;
         if ((uint32_t)(SystemTime_Millis() - t0) > 4000U) return -1;
     }
@@ -155,6 +158,7 @@ int MusicStore_BeginUpload(uint32_t size)
     s_up_crc   = 0xFFFFFFFFUL;
     s_st       = 0;
     s_erased_sect = 0xFF;
+    s_eraised_upto = 0;
     s_has_fw   = 0;
     return 0;
 }
@@ -202,7 +206,8 @@ void MusicStore_Poll(void)
             return;
 
         case 2:   /* ?滆????戝?欓〉：�??纭保�???湪????尯已�? */
-            if (s_erased_sect != cur_sector()) {
+            /* 预擦高水位: 扇区[s_eraised_upto-1]及之前已擦, 跳过; 仅超出预擦范围才按需擦 */
+            if ((uint32_t)cur_sector() >= s_eraised_upto && s_erased_sect != cur_sector()) {
                 s_st = 1;        /* 进�?ユ摝????? */
                 continue;
             }
@@ -221,6 +226,7 @@ void MusicStore_Poll(void)
             if (r == 1) { SysFlashOp_Release(); return; }
             if (r != 0) { SysFlashOp_Release(); MusicStore_AbortUpload(); return; }
             s_erased_sect = cur_sector();
+            if ((uint32_t)cur_sector() + 1U > s_eraised_upto) s_eraised_upto = (uint32_t)cur_sector() + 1U;
             s_st_t0 = now;
             s_st = 6;   /* ?? WIP 等�?? */
             continue;
@@ -335,12 +341,15 @@ int MusicStore_WipeForSize(uint32_t size)
 {
     uint32_t n = (size + MUSIC_SECTOR_SIZE - 1U) / MUSIC_SECTOR_SIZE;
     uint32_t i;
+    if (!s_init || size == 0 || size > MUSIC_MAX_FILE_SIZE) return -1;
+    if (n == 0) n = 1U;
     if (n > 32U) n = 32U;   /* 上限 128KB, 实际 .mub 很小 */
     if (flash_erase_sync(MUSIC_FLASH_BASE) != 0) return -1;   /* 头扇区 */
     for (i = 0; i < n; i++) {
         if (flash_erase_sync(MUSIC_DATA_BASE + i * MUSIC_SECTOR_SIZE) != 0) return -1;
         s_has_fw = 0; s_file_size = 0;
     }
+    s_eraised_upto = n;              /* 扇区[0..n-1] 已预擦, 收流时不再二次擦(根因修复) */
     s_pre_active = 0; s_pre_total = 0; s_pre_cur = 0;
     return 0;
 }

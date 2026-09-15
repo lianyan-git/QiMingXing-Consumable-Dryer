@@ -493,7 +493,8 @@ static void link_rx_line(char *line)
             g_sys.music_ota_active = 1;
             g_sys.music_popup = 2;
             g_sys.wifi_ap_mode = 1;    /* AP 确认已开: 弹窗单击据此区分“关闭”与“重试” */
-            MusicStore_PrepareWipe();   /* upload session start: pre-erase old firmware area (header + old data sectors) so data write never stalls on erase */
+            /* 预擦改在握手(music_ota.c S_SIZE4 拿到实际 size 后)由 MusicStore_WipeForSize 同步完成,
+             * 再 ACK 放 ESP 发数据; 此处不再异步预擦(无 size 且会与 WipeForSize 冲突) */
 } else if (!strcmp(line, "+MUSICCLOSED")) {
             MusicOta_Abort();   /* 清除残留接收态, 保证行协议/Push 恢复 */
             g_sys.music_ota_active = 0;

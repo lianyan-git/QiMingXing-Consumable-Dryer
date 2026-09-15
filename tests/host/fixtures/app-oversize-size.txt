@@ -1,2 +1,0 @@
-Target: APP
-Program Size: Code=47000 RO-data=100 RW-data=100 ZI-data=1024

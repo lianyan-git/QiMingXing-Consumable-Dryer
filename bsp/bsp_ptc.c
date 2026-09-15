@@ -8,6 +8,28 @@
 #include "system_time.h"
 #include "stm32f10x.h"
 
+/* ---- 临时 PTC 诊断（只读快照）---- */
+PtcDiag_t g_ptc_diag;
+void PtcDiag_Snap(uint8_t src, uint8_t p_air, uint8_t p_ntc, uint8_t pwr)
+{
+    PtcDiagEntry_t e;
+    uint8_t idx;
+    e.src = src;
+    e.p_air = p_air; e.p_ntc = p_ntc; e.pwr = pwr;
+    e.ptc_max_temp  = (uint16_t)g_sys.params.ptc_max_temp;
+    e.ptc_temp_x100 = (uint16_t)(g_sys.ptc_temp * 100.0f + 0.5f);
+    e.t_ms    = SystemTime_Millis();
+    e.ccr1    = (uint16_t)TIM1->CCR1;
+    e.ccer    = (uint16_t)TIM1->CCER;
+    e.bdtr    = (uint16_t)TIM1->BDTR;
+    e.cr1     = (uint16_t)TIM1->CR1;
+    e.crh_pa8 = (uint8_t)(((uint32_t)GPIOA->CRH >> 28U) & 0xFU);
+    idx = (uint8_t)(g_ptc_diag.wrap % PTC_DIAG_DEPTH);
+    g_ptc_diag.entries[idx] = e;
+    g_ptc_diag.wrap = (uint8_t)(g_ptc_diag.wrap + 1U);
+    if (g_ptc_diag.count < PTC_DIAG_DEPTH) g_ptc_diag.count++;
+}
+
 /* 加热许可: 0=禁止(PTC_SetPower 被强制为0输出) 1=允许
  * 防止任何路径不经许可直接调 PTC_SetPower(>0) 就加热 */
 static uint8_t ptc_permit = 0;
@@ -174,6 +196,7 @@ autotune_running = 1;
     PTC_Enable();
     Fan_SetSpeed(fan_pct);
     PTC_SetPower(100);
+    PtcDiag_Snap(1, 0xFF, 0xFF, 0xFF);   /* 临时诊断: PID 启动后快照 */
 }
 
 uint8_t PTC_PID_AutotuneProcess(void)
