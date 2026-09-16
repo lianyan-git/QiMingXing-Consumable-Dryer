@@ -23,6 +23,14 @@ void Board_EarlyInit(void)
     GPIO_Init(PIN_PTC_PWM_PORT, &gpio);
     Board_ForceHeaterOff();
 
+    /* 上电先把 WS2812 数据线(PB6/PB7)钳低: 复位瞬间引脚浮空会被灯珠误判为数据
+     * → 随机点亮若干颗。初始化后由 RGB_Strip_Init 正常接管。 */
+    gpio.GPIO_Pin = PIN_RGB2_PIN | PIN_RGB3_PIN;
+    gpio.GPIO_Speed = GPIO_Speed_50MHz;
+    gpio.GPIO_Mode = GPIO_Mode_Out_PP;
+    GPIO_Init(PIN_RGB2_PORT, &gpio);
+    GPIO_ResetBits(PIN_RGB2_PORT, PIN_RGB2_PIN | PIN_RGB3_PIN);
+
     GPIO_PinRemapConfig(GPIO_Remap_SWJ_JTAGDisable, ENABLE);
 }
 

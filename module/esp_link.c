@@ -45,6 +45,7 @@ static uint8_t  s_pending_music = 0;   /* OK 鍓嶆敹鍒扮殑闊充箰涓婁�
 static uint8_t  s_pending_lang = 0;
 static uint8_t  s_closing = 0;
 static uint8_t  s_pow_on = 0;
+static uint32_t s_boot_t0 = 0;      /* BOOT 状态首次进入时刻(超时判定用), 0=尚未计时 */
 static uint32_t s_close_tick = 0;
 static char     s_out[896];            /* JSON 缁勫寘澶嶇敤缂撳啿锛12 棰勮炬渶闀 ~850B锛 */
 
@@ -490,11 +491,13 @@ static void link_rx_line(char *line)
             g_sys.wifi_connected = 0; s_ip[0] = 0;
             if (s_state == ESPLINK_ONLINE) s_state = ESPLINK_CONNECTING;
                 } else if (!strcmp(line, "+MUSICAP")) {
+            /* 会话建立: 先复位语言/音乐 FSM, 防止上次会话残留 s_st 吞掉本次握手字节 */
+            LangOta_Abort();
+            MusicOta_Init();
             g_sys.music_ota_active = 1;
             g_sys.music_popup = 2;
             g_sys.wifi_ap_mode = 1;    /* AP 确认已开: 弹窗单击据此区分“关闭”与“重试” */
-            /* 预擦改在握手(music_ota.c S_SIZE4 拿到实际 size 后)由 MusicStore_WipeForSize 同步完成,
-             * 再 ACK 放 ESP 发数据; 此处不再异步预擦(无 size 且会与 WipeForSize 冲突) */
+            /* 音乐上传: MUSICAP 已开, 握手交由 music_ota 立即 ACK, 擦除由 Poll 按需推进 */
 } else if (!strcmp(line, "+MUSICCLOSED")) {
             MusicOta_Abort();   /* 清除残留接收态, 保证行协议/Push 恢复 */
             g_sys.music_ota_active = 0;
@@ -512,6 +515,13 @@ static void link_rx_line(char *line)
             g_sys.wifi_ap_mode = 0;
             g_sys.music_popup = 4;    /* 完成态：帧循环 1.8s 后自动收起 */    /* 瀹屾垚鍚庤嚜鍔ㄥ叧寮圭獥 */
             g_sys.ui_force_redraw = 1;
+        } else if (!strcmp(line, "+LANGAP")) {
+            /* 字库 AP 确认: 严格按 ESP01S 返回 +LANGAP 才认为已开, 才显示弹窗/热点 */
+            LangOta_Init();
+            g_sys.lang_ap_active = 1;
+            g_sys.lang_popup = 2;
+            g_sys.wifi_ap_mode = 1;
+            g_sys.lang_upload_pct = 0;
         } else if (!strcmp(line, "+MUSICERR")) {
             MusicOta_Abort();
             g_sys.music_ota_active = 0;
@@ -530,12 +540,10 @@ static void link_rx_line(char *line)
             s_pending_music = 0;
             s_pending_lang = 0;
             link_send(is_lang ? "AT+LANGAP" : "AT+MUSICAP");
-            g_sys.music_popup = 2;
-            g_sys.music_ota_active = 1;
-            if (is_lang) g_sys.lang_ap_active = 1;
+            /* 弹窗/active 严格等 ESP 确认行(+MUSICAP/+LANGAP)再置位, 不提前显示热点 */
             s_state = ESPLINK_CONFIG;   /* 闊充箰涓婁紶 AP 浼氳瘽锛氫笉鍐嶈嚜鍔 WEBSTART */
             s_ip[0] = 0;
-            g_sys.wifi_ap_mode = 1;
+            g_sys.wifi_ap_mode = 1;     /* 已请求 AP: 阻止自动恢复连接; 具体确认由 +XXXAP 行完成 */
         } else {
             s_state = ESPLINK_CONNECTING;
             s_state_tick = SystemTime_Millis();
@@ -584,6 +592,21 @@ void EspLink_Process(void)
     if (s_state == ESPLINK_BOOT && (uint32_t)(now - s_state_tick) >= BOOT_POLL_MS) {
         s_state_tick = now;
         link_send("AT");
+    }
+    /* BOOT 超时: 一直等不到 OK 说明 ESP01S 残留/掉线(上一会话失败), 强制断电复位避免 AP 永远打不开。
+     * 时间戳方案: 进入 BOOT 首次计时, 8s 无前进则断电重上电重新 BOOT。无 static 边沿残留。 */
+    if (s_state == ESPLINK_BOOT) {
+        if (s_boot_t0 == 0) s_boot_t0 = now;                 /* 首次进入 BOOT: 开始计时 */
+        else if ((uint32_t)(now - s_boot_t0) > 8000U) {      /* ~8s 无 OK */
+            s_boot_t0 = 0;                                   /* 重新计时 (断电重上电后再进 BOOT 重新计) */
+            s_pow_on = 1;
+            s_pow_ms = 10;           /* 断电 1s → 上电 3s → 重新 BOOT */
+            s_state_tick = now;
+            s_closing = 0;
+            s_li = 0;
+        }
+    } else {
+        s_boot_t0 = 0;   /* 离开 BOOT: 清计时 */
     }
     if (s_state == ESPLINK_CONNECTING && (uint32_t)(now - s_state_tick) >= START_TMO_MS) {
         s_state_tick = now;
@@ -687,8 +710,7 @@ void EspLink_MusicOpenAp(void)
         /* WiFi 已在线: 直接发 MUSICAP 切 APSTA(AP+STA 共存), 不断 WiFi */
         s_pending_music = 0;
         link_send("AT+MUSICAP");
-        g_sys.music_popup = 2;
-        return;
+        return;   /* popup 保持待开启: 等 ESP 回 +MUSICAP 确认后才切“连接热点”弹窗 */
     }
     EspUart_Init();          /* ensure UART initialized even if WiFi was never toggled on this power cycle */
     esp_power(0);
@@ -702,7 +724,6 @@ void EspLink_MusicOpenAp(void)
     s_state = ESPLINK_BOOT;
     s_ip[0] = 0;
     g_sys.music_ota_active = 0;
-    g_sys.music_popup = 2;
 }
 
 /* 语言字库上传 AP：与音乐同模式(在线直接发/离线冷启动) */
@@ -714,8 +735,7 @@ void EspLink_LangOpenAp(void)
     if (s_state == ESPLINK_ONLINE) {
         s_pending_lang = 0;
         link_send("AT+LANGAP");
-        g_sys.lang_ap_active = 1;
-        return;
+        return;   /* 等 ESP 回 +LANGAP 确认后才置 lang_ap_active + 弹窗 */
     }
     EspUart_Init();
     esp_power(0);
@@ -729,7 +749,6 @@ void EspLink_LangOpenAp(void)
     s_state = ESPLINK_BOOT;
     s_ip[0] = 0;
     g_sys.music_ota_active = 0;
-    g_sys.lang_ap_active = 1;
 }
 
 void EspLink_MusicCloseAp(void)
@@ -745,6 +764,8 @@ void EspLink_LangCloseAp(void)
     link_send("AT+LANGCLOSE");
     s_pending_lang = 0;
     g_sys.lang_ap_active = 0;
+    if (g_sys.lang_popup == 2) g_sys.lang_popup = 1;   /* 回到“待开启”, 原则同 +MUSICCLOSED */
+    g_sys.wifi_ap_mode = 0;
 }
 
 /* 涓绘満涓婇勮惧炲垹鏀瑰悗锛屾妸鏈鏂伴勮捐〃鎺ㄧ粰缃戦〉锛堢綉椤 handleMsg 'PRESET_LIST' 瀹炴椂鍒锋柊锛 */

@@ -39,15 +39,10 @@ static uint32_t s_pkt_len   = 0;
 static uint32_t s_pkt_need  = 0;
 static uint8_t  s_active    = 0;
 static uint8_t  s_error     = 0;
+static uint8_t  s_wr_pend   = 0;   /* 1=已排队写盘, 待 Poll 完成后补 ACK */
 static uint32_t s_last_act  = 0;
 static uint8_t  s_crchi_tmp = 0;
 static uint32_t s_crc_expect = 0;
-
-/* spill：上一包未吸收字节，落盘后补 ACK */
-static uint8_t  s_spill[MT_PKT_MAX];
-static uint32_t s_spill_len = 0;
-static uint32_t s_spill_off = 0;
-static uint8_t  s_ack_pend  = 0;
 
 static uint16_t crc16_modbus(uint16_t crc, uint8_t b)
 {
@@ -73,12 +68,10 @@ static void leave_active(void)
  * 否则 s_active 卡 1 → EspLink 将后续 ESP 全部字节丢弃(WiFi/AP/弹窗全冻结). */
 static void fail(void)
 {
+    MusicStore_AbortUpload();   /* 复位写 FSM, 防止残留阻塞下次握手 */
     leave_active();
     s_error = 1;
     s_st = S_IDLE;
-    s_ack_pend = 0;
-    s_spill_len = 0;
-    s_spill_off = 0;
     g_sys.music_popup = 5;   /* 失败态: 帧循环自动收起 */
 }
 
@@ -101,7 +94,8 @@ void MusicOta_FeedByte(uint8_t b)
 {
     s_last_act = SystemTime_Millis();
 
-    if (s_ack_pend) return;   /* 上一包尚未落盘：忽略新字节 */
+    /* 写盘 FSM 进行中: 忽略新字节(与 lang_ota 一致, ESP 等我们 ACK 不会发包) */
+    if (MusicStore_WriteBusy()) return;
 
     switch (s_st) {
     case S_IDLE:
@@ -120,16 +114,15 @@ void MusicOta_FeedByte(uint8_t b)
     case S_SIZE4:
         s_total |= (uint32_t)b;
         if (s_total == 0 || s_total > MUSIC_MAX_FILE_SIZE) { ack(0); fail(); break; }
+        /* 与语言上传同构: 握手立即 ACK, 擦除延迟到每包 Poll 懒做 */
         if (MusicStore_BeginUpload(s_total) != 0) { ack(0); fail(); break; }
-        /* 与 OTA 一致: 掌手后先擦净目标扇区(头+数据), 擦完才 ACK, ESP 才分包传 */
-        if (MusicStore_WipeForSize(s_total) != 0) { ack(0); fail(); break; }
         s_recv = 0; s_exp_seq = 0; s_crc = 0xFFFFFFFFUL;
         s_pkt_len = 0; s_pkt_need = 0; s_active = 1; s_error = 0;
         g_sys.music_popup = 3;                  /* 弹窗切上传中 */
         g_sys.music_upload_total = s_total;
         g_sys.music_upload_recv = 0;
         g_sys.music_upload_pct = 0;
-        ack(1);
+        ack(1);                                 /* 立即 ACK 放行 ESP 发数据 */
         s_st = S_PKT_AA;
         break;
 
@@ -140,7 +133,7 @@ void MusicOta_FeedByte(uint8_t b)
     case S_PKT_SEQH: s_seq = (uint16_t)b << 8; s_st = S_PKT_SEQL; break;
     case S_PKT_SEQL:
         s_seq |= b;
-        if (s_seq != s_exp_seq) { ack(0); fail(); break; }
+        if (s_seq != s_exp_seq) { ack(0); s_st = S_PKT_AA; break; }  /* 序号错: NAK 让 ESP 重传同 seq 包 */
         {
             uint32_t remain = s_total - s_recv;
             s_pkt_need = (remain > MT_PKT_MAX) ? MT_PKT_MAX : remain;
@@ -164,7 +157,7 @@ void MusicOta_FeedByte(uint8_t b)
         crc = crc16_modbus(crc, (uint8_t)(s_seq & 0xFF));
         for (uint32_t i = 0; i < s_pkt_len; i++) crc = crc16_modbus(crc, s_pkt[i]);
         if ((uint8_t)(crc >> 8) != s_crchi_tmp || (uint8_t)(crc & 0xFF) != crclo) {
-            ack(0); fail(); break;
+            ack(0); s_st = S_PKT_AA; break;   /* CRC 错: NAK 让 ESP 重传 */
         }
         s_st = S_PKT_55;
         break;
@@ -176,21 +169,11 @@ void MusicOta_FeedByte(uint8_t b)
                 s_crc ^= s_pkt[i];
                 for (int j = 0; j < 8; j++) s_crc = (s_crc & 1) ? (s_crc >> 1) ^ 0xEDB88320UL : (s_crc >> 1);
             }
-            {
-                uint32_t left = MusicStore_Write(s_pkt, s_pkt_len);
-                if (left > 0) {
-                    memcpy(s_spill, s_pkt + (s_pkt_len - left), left);
-                    s_spill_off = 0; s_spill_len = left;
-                }
-                s_ack_pend = 1;   /* 本包全部落盘后才补 ACK, 保证 ESP 严格等 ack 发包 */
-            }
-            s_recv += s_pkt_len;
-            s_exp_seq++;
-            g_sys.music_upload_recv = s_recv;
-            g_sys.music_upload_pct = (uint8_t)(s_recv * 100U / s_total);
-            s_st = (s_recv >= s_total) ? S_END_AA : S_PKT_AA;
+            /* 与语言上传同构: 包排入 MusicStore 写 FSM, 由 Poll 落盘后再补 ACK */
+            if (MusicStore_WritePacket(s_pkt, s_pkt_len) != 0) { ack(0); fail(); break; }
+            s_st = S_IDLE;               /* 写盘期间不解析新字节(FeedByte busy 让出, Poll 完成后回 S_PKT_AA) */
         } else {
-            ack(0); fail();
+            ack(0); s_st = S_PKT_AA;   /* 尾字节错: NAK 让 ESP 重传 */
         }
         break;
 
@@ -231,29 +214,30 @@ void MusicOta_FeedByte(uint8_t b)
 
 void MusicOta_Poll(void)
 {
-    MusicStore_Poll();
+    int pw;
 
-    /* spill 续写; 本包数据全部落盘(缓冲空且写进度追上)后才补 ACK */
-    if (s_ack_pend) {
-        if (s_spill_len > 0) {
-            uint32_t left = MusicStore_Write(s_spill + s_spill_off, s_spill_len - s_spill_off);
-            if (left == 0) {
-                s_spill_len = 0; s_spill_off = 0;
-            } else {
-                s_spill_off = s_spill_len - left;
-            }
-        }
-        if (s_spill_len == 0 && MusicStore_WrittenOff() >= s_recv) {
-            s_ack_pend = 0;
+    /* 写盘 FSM 推进: 本包写完(返回1)才补 ACK 并恢复收流; 失败则终止 */
+    if (s_wr_pend) {
+        pw = MusicStore_Poll();
+        if (pw == 1) {
+            s_wr_pend = 0;
+            s_recv += s_pkt_len;
+            s_exp_seq++;
+            g_sys.music_upload_recv = s_recv;
+            g_sys.music_upload_pct = (uint8_t)(s_recv * 100U / s_total);
+            s_last_act = SystemTime_Millis();   /* 写盘耗时不计入超时 */
             ack(1);
+            s_st = (s_recv >= s_total) ? S_END_AA : S_PKT_AA;
+        } else if (pw < 0) {
+            fail();
         }
+        return;   /* 写盘期间不检查空闲超时(ESP 等我们 ACK, 不会发包) */
     }
 
     if (s_active && (uint32_t)(SystemTime_Millis() - s_last_act) > 10000U) {
         MusicStore_AbortUpload();
         leave_active();
         s_error = 1; s_st = S_IDLE;
-        s_ack_pend = 0; s_spill_len = 0;
         g_sys.music_popup = 5;    /* 下载失败提示 */
     }
 }

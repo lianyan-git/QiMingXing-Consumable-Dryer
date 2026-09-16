@@ -30,7 +30,8 @@ NAME_MAX = 64
 ENT = 16 * n
 NAME_OFF = 36 + ENT
 NOTES_OFF = NAME_OFF + NAME_MAX * n
-FILE_SIZE = NOTES_OFF + sum(len(t[1]) * 4 for t in tracks)
+NOTES_BYTES = sum((len(t[1]) + 1) * 4 for t in tracks)   # 每首后带 (0,0) 终止符
+FILE_SIZE = NOTES_OFF + NOTES_BYTES
 
 
 def b(v, k):
@@ -74,7 +75,7 @@ lines.append('#define NAME_OFF    %d' % NAME_OFF)
 lines.append('#define NOTES_OFF   %d' % NOTES_OFF)
 lines.append('#define NAME_MAX    %d' % NAME_MAX)
 lines.append('#define TRACKS      %d' % n)
-lines.append('#define NOTE_BYTES  %d' % sum(len(t[1]) * 4 for t in tracks))
+lines.append('#define NOTE_BYTES  %d' % NOTES_BYTES)
 lines.append('#define FILE_SIZE   %d' % FILE_SIZE)
 lines.append('')
 lines.append('/* ---- name area: 64B fixed per track ---- */')
@@ -85,12 +86,15 @@ for i, (name, notes) in enumerate(tracks):
     lines.append('__attribute__((section("MUS_NAME"), used))')
     lines.append('const unsigned char mus_name_%d[NAME_MAX] = { %s };' % (i, ', '.join(arr)))
 lines.append('')
-lines.append('/* ---- notes area: {u16 freq, u16 dur} pairs, 0,0 end marker ---- */')
+lines.append('/* ---- notes area: ONE blob (avoids inter-object align padding breaking note_off) ---- */')
+lines.append('__attribute__((section("MUS_NOTES"), used))')
+lines.append('const uint16_t mus_notes_all[] = {')
+_all = []
 for i, (name, notes) in enumerate(tracks):
-    lines.append('__attribute__((section("MUS_NOTES"), used))')
-    lines.append('const uint16_t mus_notes_%d[] = {' % i)
-    lines.append(fmt_notes(notes + [(0, 0)]))
-    lines.append('};')
+    _all.extend(notes)
+    _all.append((0, 0))
+lines.append(fmt_notes(_all))
+lines.append('};')
 lines.append('')
 lines.append('#define B0(v) ((unsigned char)((uint32_t)(v) & 0xFFu))')
 lines.append('#define B1(v) ((unsigned char)(((uint32_t)(v) >> 8) & 0xFFu))')
@@ -123,7 +127,7 @@ for i, (name, notes) in enumerate(tracks):
     lines.append('    B0(%d), B1(%d), B2(%d), B3(%d),' % (i * 64, i * 64, i * 64, i * 64))
     lines.append('    B0(%d), B1(%d),' % (len(name.encode('utf-8')), len(name.encode('utf-8'))))
     lines.append('    0x00, 0x00,')
-    off += nb
+    off += nb + 4          # 跳过该首的 (0,0) 终止符
 lines.append('};')
 
 open(OUT_C, 'w', encoding='utf-8', newline='\n').write('\n'.join(lines) + '\n')

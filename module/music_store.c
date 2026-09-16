@@ -35,39 +35,25 @@ static uint8_t  s_init    = 0;
 static uint8_t  s_has_fw  = 0;
 static uint32_t s_file_size = 0;
 
-/* 上�?? FSM（st）�??0=空闲 1=?摝等�? 2=??戝?欓? 3=页�?欑?夊??
- *                4=头擦等�?? 5=头�?欑?夊??（Finish ??庤?涘?ワ?? */
-static uint8_t  s_st        = 0;
-static uint8_t  s_page[256];
-static uint16_t s_page_len  = 0;
 static uint32_t s_up_off    = 0;   /* written bytes (relative to data base) */
 static uint32_t s_up_total  = 0;
-static uint8_t  s_erased_sect = 0xFF;  /* last erased data sector index (data-internal), 0xFF=none */
-static uint32_t s_st_t0     = 0;
-static uint32_t s_up_crc    = 0xFFFFFFFFUL;
 
-/* pre-erase at session start: header + old data sectors, so data write never stalls on erase */
-static uint8_t  s_pre_active = 0;
-static uint8_t  s_pre_total  = 0;
-static uint8_t  s_pre_cur    = 0;
-static uint32_t s_eraised_upto = 0;   /* 已(预)擦 data 扇区高水位: 扇区[0..s_eraised_upto-1] 已擦; 0=无 */
+/* 逐包写 FSM（与 lang_ota 同构）：状态经 Poll 每个主循环推进一次
+ * 0=空闲 1=擦kick 2=擦wait 3=页kick 4=页wait；busy 让出不等锁 */
+static uint8_t  s_st        = 0;
+static uint8_t  s_hold      = 0;       /* SysFlashOp 已被本模块持有 */
+static uint8_t  s_pkt[1024];
+static uint32_t s_wr_off    = 0;       /* 本包写入起点(相对数据区) */
+static uint32_t s_wr_end    = 0;       /* 本包尾(不含) */
+static uint32_t s_pgd_off   = 0;       /* 当前页写点(相对数据区) */
+static uint32_t s_pg_len    = 0;       /* 当前页长(1..256) */
+static uint32_t s_pgn_off   = 0;       /* 当前擦的扇区序号 */
+static uint32_t s_need_sec  = 0;       /* 本包需要的最后扇区 */
+static uint32_t s_max_sec   = 0xFFFFFFFFUL;   /* 已擦到最高扇区 */
 
 static uint32_t g_hdr_chk(const MusicGlobalHdr_t *h)
 {
     return ~(h->magic ^ h->version ^ h->size ^ h->crc32);
-}
-
-static int flash_idle(uint8_t *sr1)
-{
-    if (SfudFlash_ReadSR1(sr1) != 0) return -1;
-    return (int)(*sr1 & 0x01U);
-}
-
-static uint32_t crc_byte(uint32_t crc, uint8_t b)
-{
-    crc ^= b;
-    for (int i = 0; i < 8; i++) crc = (crc & 1) ? (crc >> 1) ^ 0xEDB88320UL : (crc >> 1);
-    return crc;
 }
 
 /* ??屾ョ?? WIP 娓??浂锛???��?嬪姟锛256B页�?欐?4KB????尯?摝锛?1~2s灏?顶�? */
@@ -109,11 +95,13 @@ static int flash_erase_sync(uint32_t addr)
     int r;
     uint32_t t0 = SystemTime_Millis();
     for (;;) {
+        Watchdog_Kick();
         r = SysFlashOp_TryBegin();
         if (r || (uint32_t)(SystemTime_Millis() - t0) > 2000U) break;
     }
     if (!r) return -1;
     for (;;) {
+        Watchdog_Kick();
         r = SfudFlash_StartEraseSector(addr);
         if (r == 1) { SysFlashOp_Release(); continue; }
         if (r != 0) { SysFlashOp_Release(); return -1; }
@@ -131,7 +119,7 @@ void MusicStore_Init(void)
     s_init = 1;
     s_has_fw = 0;
     s_file_size = 0;
-    s_st = 0; s_page_len = 0; s_up_off = 0; s_up_total = 0;
+    s_up_off = 0; s_up_total = 0;
     memset(b, 0xFF, sizeof(b));
     if (SfudFlash_Read(MUSIC_FLASH_BASE, b, sizeof(h)) == 0) {
         memcpy(&h, b, sizeof(h));
@@ -147,162 +135,106 @@ void MusicStore_Init(void)
 
 int MusicStore_HasFirmware(void)   { return s_init && s_has_fw; }
 uint32_t MusicStore_FileSize(void) { return s_file_size; }
-uint32_t MusicStore_WrittenOff(void) { return s_up_off; }
 
 int MusicStore_BeginUpload(uint32_t size)
 {
     if (!s_init || size == 0 || size > MUSIC_MAX_FILE_SIZE) return -1;
     s_up_total = size;
     s_up_off   = 0;
-    s_page_len = 0;
-    s_up_crc   = 0xFFFFFFFFUL;
-    s_st       = 0;
-    s_erased_sect = 0xFF;
-    s_eraised_upto = 0;
     s_has_fw   = 0;
+    s_st = 0; s_hold = 0; s_max_sec = 0xFFFFFFFFUL;
     return 0;
 }
 
-/* 返�?炴滃惛?敹字�???暟锛?页满?椂璋??敤?柟?? Poll ?惤??樺?嶇画传�?╀?欙?? */
-uint32_t MusicStore_Write(const uint8_t *buf, uint32_t len)
+/* 整包拷贝进缓冲，置写 FSM。返回 0=已排入（写由 Poll 推进）。 */
+int MusicStore_WritePacket(const uint8_t *pkt, uint32_t len)
 {
-    if (!s_init) return len;
-    if (s_pre_active) return len;   /* pre-erase not done: reject data (caller spills and waits for Poll) */
-    while (len) {
-        uint16_t take;
-        if (s_page_len >= MUSIC_PAGE_SIZE) break;   /* 页满，�?斿?炲?╀? */
-        take = (uint16_t)(MUSIC_PAGE_SIZE - s_page_len);
-        if ((uint32_t)take > len) take = (uint16_t)len;
-        memcpy(s_page + s_page_len, buf, take);
-        for (uint32_t i = 0; i < take; i++) s_up_crc = crc_byte(s_up_crc, buf[i]);
-        s_page_len = (uint16_t)(s_page_len + take);
-        buf += take;
-        len -= take;
-    }
-    return len;
+    if (!s_init || len == 0 || len > MUSIC_PKT_MAX) return -1;
+    if (s_st != 0) return -1;                     /* 上一包未写完: 拒绝(调用方应等 Poll) */
+    if (s_up_off + len > s_up_total) return -1;
+    memcpy(s_pkt, pkt, len);
+    s_wr_off  = s_up_off;
+    s_wr_end  = s_up_off + len;
+    s_need_sec = (s_wr_end - 1U) >> 12;
+    s_pgn_off  = (s_max_sec == 0xFFFFFFFFUL) ? (s_wr_off >> 12) : (s_max_sec + 1U);
+    s_pgd_off  = s_wr_off;
+    s_st = 1;                                     /* 进入擦/写 FSM */
+    return 0;
 }
 
-/* 当�?嶅????欓〉????湪????尯绝对????尯?彿锛??暟?嶅尯???锛 */
-static uint8_t cur_sector(void)
+uint8_t MusicStore_WriteBusy(void)
 {
-    return (uint8_t)(s_up_off / MUSIC_SECTOR_SIZE);
+    return (s_st != 0);
 }
 
-/* 页�?撳?茶惤??樼姸????満锛?每主循鐜�???敤锛 */
-void MusicStore_Poll(void)
+/* 每主循环推进一次写 FSM。返回 1=本包写完, 0=进行中, -1=失败 */
+int MusicStore_Poll(void)
 {
     uint8_t sr1;
-    uint32_t now;
     int r;
 
-    if (!s_init) return;
-    now = SystemTime_Millis();
+    if (!s_init || s_st == 0) return 0;
 
-    for (;;) {
-        switch (s_st) {
-        case 0:
-            if (s_pre_active) { s_st = 7; continue; }   /* pre-erase in progress */
-            if (s_page_len > 0) { s_st = 2; continue; } /* 有数据即写(含不足一页的残页, 否则最后一包 ACK 永不发) */
-            return;
-
-        case 2:   /* ?滆????戝?欓〉：�??纭保�???湪????尯已�? */
-            /* 预擦高水位: 扇区[s_eraised_upto-1]及之前已擦, 跳过; 仅超出预擦范围才按需擦 */
-            if ((uint32_t)cur_sector() >= s_eraised_upto && s_erased_sect != cur_sector()) {
-                s_st = 1;        /* 进�?ユ摝????? */
-                continue;
-            }
-            if (!SysFlashOp_TryBegin()) return;
-            r = SfudFlash_StartWritePage(MUSIC_DATA_BASE + s_up_off,
-                                         s_page, (uint32_t)s_page_len);
-            if (r == 1) { SysFlashOp_Release(); return; }
-            if (r != 0) { SysFlashOp_Release(); MusicStore_AbortUpload(); return; }
-            s_st    = 3;
-            s_st_t0 = now;
-            continue;
-
-        case 1:   /* ?摝?暟?嶆???尯锛?绝对????尯?彿 cur_sector锛 */
-            if (!SysFlashOp_TryBegin()) return;
-            r = SfudFlash_StartEraseSector(MUSIC_DATA_BASE + (uint32_t)cur_sector() * MUSIC_SECTOR_SIZE);
-            if (r == 1) { SysFlashOp_Release(); return; }
-            if (r != 0) { SysFlashOp_Release(); MusicStore_AbortUpload(); return; }
-            s_erased_sect = cur_sector();
-            if ((uint32_t)cur_sector() + 1U > s_eraised_upto) s_eraised_upto = (uint32_t)cur_sector() + 1U;
-            s_st_t0 = now;
-            s_st = 6;   /* ?? WIP 等�?? */
-            continue;
-
-        case 6:   /* ?? WIP 等�???暟?嵁????尯锛 */
-            if (now - s_st_t0 > MUSIC_ERASE_TMO) { SysFlashOp_Release(); MusicStore_AbortUpload(); return; }
-            if (flash_idle(&sr1) != 0) return;
-            SysFlashOp_Release();
-            s_st = 2;   /* ??炲?欓? */
-            continue;
-
-        case 3:   /* 页�?? WIP 绛 */
-            if (now - s_st_t0 > MUSIC_PAGE_TMO) { SysFlashOp_Release(); MusicStore_AbortUpload(); return; }
-            if (flash_idle(&sr1) != 0) return;
-            SysFlashOp_Release();
-            s_up_off  += s_page_len;
-            s_page_len = 0;
-            s_st = 0;
-            continue;
-
-        case 7:   /* pre-erase: kick current sector erase (header -> old data sectors) */
-            if (!SysFlashOp_TryBegin()) return;
-            {
-                uint32_t a = (s_pre_cur == 0) ? MUSIC_FLASH_BASE
-                             : MUSIC_DATA_BASE + ((uint32_t)(s_pre_cur - 1U)) * MUSIC_SECTOR_SIZE;
-                r = SfudFlash_StartEraseSector(a);
-                if (r == 1) { SysFlashOp_Release(); return; }
-                if (r != 0) { SysFlashOp_Release(); s_pre_active = 0; s_st = 0; continue; }
-                s_st_t0 = now;
-                s_st = 8;
-            }
-            continue;
-
-        case 8:   /* pre-erase WIP wait */
-            if (now - s_st_t0 > MUSIC_ERASE_TMO) { SysFlashOp_Release(); s_pre_active = 0; s_st = 0; return; }
-            if (flash_idle(&sr1) != 0) return;
-            SysFlashOp_Release();
-            s_pre_cur++;
-            if (s_pre_cur >= s_pre_total) {
-                s_pre_active = 0;
-                s_has_fw = 0;
-                s_file_size = 0;
-                s_st = 0;
-            }
-            continue;
-
-        default:
-            s_st = 0;
-            continue;
+    switch (s_st) {
+    case 1:   /* 擦 kick：擦本包覆盖的所有未擦扇区 */
+        if (s_pgn_off > s_need_sec) { s_st = 3; return 0; }
+        if (!s_hold) {
+            if (!SysFlashOp_TryBegin()) return 0;
+            s_hold = 1;
         }
+        r = SfudFlash_StartEraseSector(MUSIC_DATA_BASE + (s_pgn_off << 12));
+        if (r == 1) return 0;                      /* busy：等下一轮 */
+        if (r != 0) { SysFlashOp_Release(); s_hold = 0; s_st = 0; return -1; }
+        s_st = 2;
+        return 0;
+    case 2:   /* 擦 wait */
+        if (SfudFlash_ReadSR1(&sr1) != 0) return 0;
+        if (sr1 & 0x01U) return 0;
+        SysFlashOp_Release(); s_hold = 0;
+        s_max_sec = s_pgn_off;
+        s_pgn_off++;
+        s_st = 1;
+        return 0;
+    case 3:   /* 页 kick */
+        if (s_pgd_off >= s_wr_end) {               /* 本包写完 */
+            s_up_off = s_wr_end;
+            s_st = 0;
+            return 1;
+        }
+        if (!s_hold) {
+            if (!SysFlashOp_TryBegin()) return 0;
+            s_hold = 1;
+        }
+        s_pg_len = s_wr_end - s_pgd_off;
+        if (s_pg_len > 256U) s_pg_len = 256U;
+        r = SfudFlash_StartWritePage(MUSIC_DATA_BASE + s_pgd_off,
+                                     s_pkt + (s_pgd_off - s_wr_off), (uint16_t)s_pg_len);
+        if (r == 1) return 0;                      /* busy */
+        if (r != 0) { SysFlashOp_Release(); s_hold = 0; s_st = 0; return -1; }
+        s_st = 4;
+        return 0;
+    case 4:   /* 页 wait */
+        if (SfudFlash_ReadSR1(&sr1) != 0) return 0;
+        if (sr1 & 0x01U) return 0;
+        SysFlashOp_Release(); s_hold = 0;
+        s_pgd_off += s_pg_len;
+        s_st = 3;
+        return 0;
+    default:
+        s_st = 0;
+        return -1;
     }
 }
 
-/* Finish：�?ㄥ???惤?? + ??欏?ㄥ卞ご锛???屾ョ?��?嬪姟，�?斿? 0=??愬??锛 */
+/* Finish: 校验已完成字节数 + 写全局头, 全程同步。返回 0=成功 */
 int MusicStore_Finish(uint32_t full_crc, uint32_t size)
 {
     MusicGlobalHdr_t h;
     uint8_t b[sizeof(h)];
 
     if (!s_init || size != s_up_total || size == 0) return -1;
+    if (s_up_off != s_up_total) return -1;   /* 数据未全部落盘: 拒绝提交 */
 
-
-    /* 残�?欏?婇〉?惤??橈????屾�ワ�? */
-    if (s_page_len > 0) {
-        if (s_erased_sect != cur_sector()) {
-            if (flash_erase_sync(MUSIC_DATA_BASE + (uint32_t)cur_sector() * MUSIC_SECTOR_SIZE) != 0)
-                return -1;
-            s_erased_sect = cur_sector();
-        }
-        if (flash_write_page_sync(MUSIC_DATA_BASE + s_up_off, s_page, s_page_len) != 0)
-            return -1;
-        s_up_off += s_page_len;
-        s_page_len = 0;
-    }
-
-    /* ??欏?ㄥ卞ご锛?????尯0）鈹鈹�???摝??庡?欙?屼?濊???浛?崲?棫?浐浠 */
     h.magic = MUSIC_HDR_MAGIC;
     h.version = MUSIC_HDR_VERSION;
     h.size = size;
@@ -314,15 +246,14 @@ int MusicStore_Finish(uint32_t full_crc, uint32_t size)
 
     s_has_fw = 1;
     s_file_size = size;
-    s_up_off = 0; s_up_total = 0; s_st = 0;
+    s_up_off = 0; s_up_total = 0;
     return 0;
 }
 
 void MusicStore_Wipe(void)
 {
     if (!s_init) return;
-    s_st = 0; s_up_total = 0; s_page_len = 0; s_up_off = 0;
-    s_pre_active = 0; s_pre_total = 0; s_pre_cur = 0;
+    s_up_total = 0; s_up_off = 0;
     /* 只擦全局头扇区: 头失效后 TrackCount=0, 列表即空; 数据区留待下次上传按需再擦 */
     if (flash_erase_sync(MUSIC_FLASH_BASE) == 0) {
         s_has_fw = 0;
@@ -332,39 +263,14 @@ void MusicStore_Wipe(void)
 
 void MusicStore_AbortUpload(void)
 {
-    s_st = 0; s_page_len = 0; s_up_off = 0; s_up_total = 0;
+    s_up_off = 0; s_up_total = 0;
     s_has_fw = (s_file_size > 0);
-}
-
-
-int MusicStore_WipeForSize(uint32_t size)
-{
-    uint32_t n = (size + MUSIC_SECTOR_SIZE - 1U) / MUSIC_SECTOR_SIZE;
-    uint32_t i;
-    if (!s_init || size == 0 || size > MUSIC_MAX_FILE_SIZE) return -1;
-    if (n == 0) n = 1U;
-    if (n > 32U) n = 32U;   /* 上限 128KB, 实际 .mub 很小 */
-    if (flash_erase_sync(MUSIC_FLASH_BASE) != 0) return -1;   /* 头扇区 */
-    for (i = 0; i < n; i++) {
-        if (flash_erase_sync(MUSIC_DATA_BASE + i * MUSIC_SECTOR_SIZE) != 0) return -1;
-        s_has_fw = 0; s_file_size = 0;
-    }
-    s_eraised_upto = n;              /* 扇区[0..n-1] 已预擦, 收流时不再二次擦(根因修复) */
-    s_pre_active = 0; s_pre_total = 0; s_pre_cur = 0;
-    return 0;
-}
-
-void MusicStore_PrepareWipe(void)
-{
-    uint32_t n;
-    if (!s_init) return;
-    if (!s_has_fw || s_file_size == 0) return;   /* no old firmware: nothing to pre-erase */
-    n = (s_file_size + MUSIC_SECTOR_SIZE - 1U) / MUSIC_SECTOR_SIZE;
-    if (n > 32U) n = 32U;
-    s_pre_total = (uint8_t)n + 1U;   /* +1 header sector */
-    s_pre_cur   = 0;
-    s_pre_active = 1;
-    s_st = 7;
+    /* 复位写 FSM: 若上次上传在半途被中断(关闭/失败/超时), s_st 残留非0
+     * 会导致 MusicStore_WriteBusy() 恒真, 下次握手字节全被 FeedByte 吞掉→卡0 */
+    s_st = 0;
+    s_hold = 0;
+    s_max_sec = 0xFFFFFFFFUL;
+    s_wr_off = s_wr_end = s_pgd_off = s_pg_len = 0;
 }
 
 /* ---- ??楄〃 / 读�?? ---- */

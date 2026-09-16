@@ -216,17 +216,21 @@ targets:
           afterBuildTasks:
             - name: output dryer_app.bin
               abortAfterFailed: true
-              command: fromelf.exe --bin --output ".\build\APP\dryer_app.bin" ".\build\APP\Project.axf"
+              command: fromelf.exe --bin --output ".\build\APP\dryer_app.bin" ".\build\APP\Project.axf" & powershell -NoProfile -ExecutionPolicy Bypass -File "..\..\tools\clean-build.ps1" -Dir ".\build\APP"
               disable: false
           asm-compiler: {}
-          beforeBuildTasks: []
+          beforeBuildTasks:
+            - name: prebuild wipe stale leftovers
+              abortAfterFailed: true
+              command: powershell -NoProfile -ExecutionPolicy Bypass -File "..\..\tools\clean-build.ps1" -Dir ".\build\APP" -Keep
+              disable: false
           c/cpp-compiler:
             CXX_FLAGS: --diag_suppress=1 --diag_suppress=1295
             C_FLAGS: --diag_suppress=1 --diag_suppress=1295
             c99-mode: true
             gnu-extensions: true
             one-elf-section-per-function: true
-            optimization: level-1
+            optimization: level-0
             warnings: all-warnings
           global:
             output-debug-info: enable
@@ -389,10 +393,14 @@ targets:
           afterBuildTasks:
             - name: output dryer_bootloader.bin
               abortAfterFailed: true
-              command: fromelf.exe --bin --output ".\build\Bootloader\dryer_bootloader.bin" ".\build\Bootloader\Project.axf"
+              command: fromelf.exe --bin --output ".\build\Bootloader\dryer_bootloader.bin" ".\build\Bootloader\Project.axf" & powershell -NoProfile -ExecutionPolicy Bypass -File "..\..\tools\clean-build.ps1" -Dir ".\build\Bootloader"
               disable: false
           asm-compiler: {}
-          beforeBuildTasks: []
+          beforeBuildTasks:
+            - name: prebuild wipe stale leftovers
+              abortAfterFailed: true
+              command: powershell -NoProfile -ExecutionPolicy Bypass -File "..\..\tools\clean-build.ps1" -Dir ".\build\Bootloader" -Keep
+              disable: false
           c/cpp-compiler:
             CXX_FLAGS: --diag_suppress=1 --diag_suppress=1295
             C_FLAGS: --diag_suppress=1 --diag_suppress=1295
@@ -599,11 +607,15 @@ targets:
           afterBuildTasks:
             - name: output Music.bin
               abortAfterFailed: true
-              command: fromelf.exe --bin --output ".\build\Music\Music.bin" ".\build\Music\Project.axf"
+              command: fromelf.exe --bin --output ".\build\Music\Music.bin" ".\build\Music\Project.axf" & powershell -NoProfile -ExecutionPolicy Bypass -File "..\..\tools\clean-build.ps1" -Dir ".\build\Music"
               disable: false
           asm-compiler:
             defines: []
-          beforeBuildTasks: []
+          beforeBuildTasks:
+            - name: prebuild wipe stale leftovers
+              abortAfterFailed: true
+              command: powershell -NoProfile -ExecutionPolicy Bypass -File "..\..\tools\clean-build.ps1" -Dir ".\build\Music" -Keep
+              disable: false
           c/cpp-compiler:
             CXX_FLAGS: --diag_suppress=1 --diag_suppress=1295
             C_FLAGS: --diag_suppress=1 --diag_suppress=1295

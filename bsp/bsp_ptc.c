@@ -8,32 +8,6 @@
 #include "system_time.h"
 #include "stm32f10x.h"
 
-/* ---- 临时 PTC 诊断（只读快照）---- */
-PtcDiag_t g_ptc_diag;
-void PtcDiag_Snap(uint8_t src, uint8_t p_air, uint8_t p_ntc, uint8_t pwr)
-{
-    PtcDiagEntry_t e;
-    uint8_t idx;
-    e.src = src;
-    e.p_air = p_air; e.p_ntc = p_ntc; e.pwr = pwr;
-    e.ptc_max_temp  = (uint16_t)g_sys.params.ptc_max_temp;
-    e.ptc_temp_x100 = (uint16_t)(g_sys.ptc_temp * 100.0f + 0.5f);
-    e.t_ms    = SystemTime_Millis();
-    e.ccr1    = (uint16_t)TIM1->CCR1;
-    e.ccer    = (uint16_t)TIM1->CCER;
-    e.bdtr    = (uint16_t)TIM1->BDTR;
-    e.cr1     = (uint16_t)TIM1->CR1;
-    e.crh_pa8 = (uint8_t)(((uint32_t)GPIOA->CRH >> 28U) & 0xFU);
-    idx = (uint8_t)(g_ptc_diag.wrap % PTC_DIAG_DEPTH);
-    g_ptc_diag.entries[idx] = e;
-    g_ptc_diag.wrap = (uint8_t)(g_ptc_diag.wrap + 1U);
-    if (g_ptc_diag.count < PTC_DIAG_DEPTH) g_ptc_diag.count++;
-}
-
-/* 加热许可: 0=禁止(PTC_SetPower 被强制为0输出) 1=允许
- * 防止任何路径不经许可直接调 PTC_SetPower(>0) 就加热 */
-static uint8_t ptc_permit = 0;
-static uint8_t ptc_engaged = 0;   /* PA8 是否已切到 TIM1_CH1 PWM(AF) */
 static uint8_t autotune_running = 0;
 static uint8_t autotune_done = 0;
 static uint8_t autotune_progress = 0;
@@ -44,19 +18,29 @@ static float oscillation_amplitude = 0.0f;
 static float oscillation_period = 0.0f;
 static uint8_t peak_count = 0;
 
+/* PA8 是否已切到 TIM1_CH1 复用。engage 只执行一次——GPIO_Init(AF_PP) 会复位整个
+ * GPIOA 端口, 每次 SetPower 都执行会周期性打乱 PA8/TFT 等 GPIO 配置(影响加热与收流)。 */
+static uint8_t ptc_engaged = 0;
+
 void PTC_Init(void)
 {
     GPIO_InitTypeDef g;
     RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA | RCC_APB2Periph_TIM1, ENABLE);
 
-    /* 上电保险: 先把 PA8 强制拉低(普通推挽), 避免复位/Bootloader 遗留的 TIM1 状态
-     * 在复用配置生效前输出高电平 → 上电随机加热 */
+    /* 掉电不彻底(灯板电容等)可能导致 RAM 残留: ptc_engaged 可能残留 1 使 engage 被跳过。
+     * 这里显式清零, 并强制 PA8=GPIO 低 + CCR=0, 彻底抹掉任何残留状态。 */
+    ptc_engaged = 0;
+
+    /* PA8 保持 GPIO 推挽低(物理关断), 不切 AF_PP。
+     * 只有首次 PTC_SetPower(>0) 才切到 TIM1_CH1。
+     * 实测: 初始化即切 AF 时, 上电/复位窗口 PA8 被 TIM1 输出级接管, 概率输出高电平→误加热。 */
     g.GPIO_Pin = PIN_PTC_PWM_PIN;
     g.GPIO_Mode = GPIO_Mode_Out_PP;
     g.GPIO_Speed = GPIO_Speed_2MHz;
     GPIO_Init(PIN_PTC_PWM_PORT, &g);
     GPIO_ResetBits(PIN_PTC_PWM_PORT, PIN_PTC_PWM_PIN);
 
+    /* 配置 TIM1 时基/OC1(风扇 CH4 依赖时基), CCR1=0 */
     TIM_TimeBaseInitTypeDef t;
     t.TIM_Prescaler = 71;
     t.TIM_Period = 999;
@@ -71,28 +55,22 @@ void PTC_Init(void)
     o.TIM_Pulse = 0;
     o.TIM_OCPolarity = TIM_OCPolarity_High;
     TIM_OC1Init(PTC_PWM_TIM, &o);
-    /* 关闭 CH1 预装载: PTC_SetPower 写 CCR1 立即生效, 避免预装载下 CCR 延迟/不更新导致的
-     * "上电默认导通 / 停止烘干后仍加热不受控 / 烘干中功率乱跳" */
     TIM_OC1PreloadConfig(PTC_PWM_TIM, TIM_OCPreload_Disable);
     TIM_CtrlPWMOutputs(PTC_PWM_TIM, ENABLE);
     TIM_Cmd(PTC_PWM_TIM, ENABLE);
-    TIM_SetCompare1(PTC_PWM_TIM, 0);                        /* 保险: CCR1 清零(关预装载后直接生效) */
-    TIM_GenerateEvent(PTC_PWM_TIM, TIM_EventSource_Update); /* 同步影子寄存器, 输出立即拉低 */
-    ptc_permit = 0;                                        /* 默认禁止加热 */
-    ptc_engaged = 0;                                       /* PA8 保持 GPIO 推推低(物理关), 未切 PWM */
-    /* 注: TIM1 时基/CH1 已配置且 MOE/Cmd 已开(风扇 TIM1_CH4 依赖), 但 PA8 未切 AF
-     * → 引导期 PA8 = GPIO 推推引脚高低(外部上拉也拉不高), 加热器物理关闭 */
-    PTC_SetPower(0);                                        /* 上电默认关闭加热 */
+    TIM_SetCompare1(PTC_PWM_TIM, 0);
+    TIM_GenerateEvent(PTC_PWM_TIM, TIM_EventSource_Update);
+    TIM_SetCompare1(PTC_PWM_TIM, 0);
 
+    /* 也覆盖 CCER/BDTR 残留: 若 RAM 残留使 CH1 曾使能输出, 这里强制 CCR=0 后输出恒低 */
+    TIM_SetCompare1(PTC_PWM_TIM, 0);
+
+    /* PA8 已是 GPIO 低; TIM1 配置完成、CCR1=0 同步完成, 但未接 PA8 */
 }
 
-
-void PTC_Enable(void)
-{
-    ptc_permit = 1;
-}
-
-/* 切换 PA8 到 TIM1_CH1 PWM 复用(任何 >0% 输出前执行) */
+/* 首次 >0% 输出前把 PA8 从 GPIO 推挽低切到 TIM1_CH1 复用。
+ * 只执行一次: STM32 库 GPIO_Init(AF_PP) 会复位整个 GPIOA, 反复执行会周期性
+ * 打乱 PA8/TFT 等 GPIO(实测加热与上传异常)。 */
 static void ptc_engage(void)
 {
     if (ptc_engaged) return;
@@ -103,23 +81,15 @@ static void ptc_engage(void)
         g.GPIO_Speed = GPIO_Speed_50MHz;
         GPIO_Init(PIN_PTC_PWM_PORT, &g);
     }
-    TIM_SetCompare1(PTC_PWM_TIM, 0);   /* 先钳低, 避免切换瞬间残留高 */
+    TIM_SetCompare1(PTC_PWM_TIM, 0);   /* 先钳低再放行 */
     ptc_engaged = 1;
-}
-
-void PTC_Disable(void)
-{
-    ptc_permit = 0;
-    if (ptc_engaged) TIM_SetCompare1(PTC_PWM_TIM, 0);   /* 立即关断(PWM 恒低) */
 }
 
 void PTC_SetPower(uint8_t percent)
 {
-    if (!ptc_permit) percent = 0;   /* 无许可: 强制0 */
     if (percent > 100) percent = 100;
     if (percent == 0) {
-        /* 0%: 未 engage → PA8 是 GPIO 推推低(物理关); 已 engage → CCR 清零(PWM 恒低) */
-        if (ptc_engaged) TIM_SetCompare1(PTC_PWM_TIM, 0);
+        TIM_SetCompare1(PTC_PWM_TIM, 0);
         return;
     }
     ptc_engage();
@@ -193,10 +163,8 @@ autotune_running = 1;
     at_rising = 0; at_have_trough = 0; at_last_peak_time = 0;
     at_stage = 0; at_meas_cnt = 0; at_sum_period = 0; at_sum_amp = 0; at_hold_ms = 0;
 
-    PTC_Enable();
     Fan_SetSpeed(fan_pct);
     PTC_SetPower(100);
-    PtcDiag_Snap(1, 0xFF, 0xFF, 0xFF);   /* 临时诊断: PID 启动后快照 */
 }
 
 uint8_t PTC_PID_AutotuneProcess(void)
@@ -216,7 +184,7 @@ uint8_t PTC_PID_AutotuneProcess(void)
             System_RequestSave();
         }
         autotune_done = 1; autotune_running = 0; autotune_progress = 100;
-        PTC_Disable(); Fan_SetSpeed(0);
+        PTC_SetPower(0); Fan_SetSpeed(0);
         return 1;
     }
 
@@ -325,7 +293,7 @@ uint8_t PTC_PID_AutotuneProcess(void)
             g_sys.pid_calibrated = 1;
             System_RequestSave();
         }
-        PTC_Disable();
+        PTC_SetPower(0);
         Fan_SetSpeed(0);
         autotune_done = 1;
         autotune_running = 0;
@@ -379,7 +347,6 @@ void PTC_TempPID_AutotuneStart(float target_temp)
     tp_rising = 0; tp_have_trough = 0; tp_last_peak_time = 0;
     tp_stage = 0; tp_meas_cnt = 0; tp_sum_period = 0; tp_sum_amp = 0; tp_hold_ms = 0;
 
-    PTC_Enable();
     Fan_SetSpeed(100);
     PTC_SetPower(100);
 }
@@ -423,7 +390,7 @@ uint8_t PTC_TempPID_AutotuneProcess(void)
                 System_RequestSave();
             }
             temp_pid_done = 1; temp_pid_running = 0; temp_pid_progress = 100;
-            PTC_Disable(); Fan_SetSpeed(0);
+            PTC_SetPower(0); Fan_SetSpeed(0);
             return 1;
         }
 
@@ -531,7 +498,7 @@ uint8_t PTC_TempPID_AutotuneProcess(void)
                 g_sys.pid_calibrated = 1;
                 System_RequestSave();
             }
-            PTC_Disable();
+            PTC_SetPower(0);
             Fan_SetSpeed(0);
             temp_pid_done = 1;
             temp_pid_running = 0;

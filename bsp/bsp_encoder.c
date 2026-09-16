@@ -58,6 +58,7 @@ static volatile uint32_t enc_boot_ms = 0;  /* ISR 绱鍔狅細1kHz 閲囨牱鐩�
 static volatile uint32_t btn_down_time = 0;
 static volatile uint8_t btn_down = 0;
 static volatile uint8_t btn_long_flag = 0;
+static uint8_t btn_long_reported = 0;   /* 本次按下已回报过长按: 松开不再重复 */
 
 /* EC11 鐩镐綅琛锛氱敱涓婁竴鐘舵佷笌鏈鐘舵佽仈鍚堟煡琛ㄥ緱 卤1锛堟湁鏁堟部锛夛紝鍏朵綑涓 0 */
 static const int8_t enc_phase_table[16] = {0,-1,1,0,1,0,0,-1,-1,0,0,1,0,1,-1,0};
@@ -158,15 +159,25 @@ EncoderEvent_t Encoder_GetEvent(void)
 
     if (!btn_down && GPIO_ReadInputDataBit(PIN_ENC_BTN_PORT, PIN_ENC_BTN_PIN) == 0) {
         btn_down = 1; btn_down_time = SystemTime_Millis(); g_last_input_ms = btn_down_time;
+        btn_long_reported = 0;
     }
-    if (btn_long_flag) { btn_long_flag = 0; return ENC_EVT_LONG_PRESS; }
+    /* 一次物理长按只回报一次 LONG_PRESS: 按住超时 or 松开超时, 二者只取一。
+     * 按住期间 btn_long_flag 会持续置位, 但报告一次后(btn_long_reported=1)不再重复。 */
+    if (btn_long_flag && !btn_long_reported) {
+        btn_long_flag = 0;
+        btn_long_reported = 1;
+        return ENC_EVT_LONG_PRESS;
+    }
     if (btn_down && GPIO_ReadInputDataBit(PIN_ENC_BTN_PORT, PIN_ENC_BTN_PIN) == 1) {
         uint32_t dur = SystemTime_Millis() - btn_down_time;
         btn_down = 0;
-        if (dur > 1000) return ENC_EVT_LONG_PRESS;
+        if (dur > 1000) {
+            if (!btn_long_reported) { btn_long_reported = 1; return ENC_EVT_LONG_PRESS; }
+            return ENC_EVT_NONE;   /* 已按超时回报过, 松开不重复 */
+        }
         if (dur > 50) return ENC_EVT_CLICK;
     }
-    if (btn_down && (SystemTime_Millis() - btn_down_time > 1000) && !btn_long_flag) {
+    if (btn_down && (SystemTime_Millis() - btn_down_time > 1000) && !btn_long_flag && !btn_long_reported) {
         btn_long_flag = 1;
     }
     return ENC_EVT_NONE;
@@ -328,18 +339,10 @@ void Encoder_Process(void)
         TFT_SetBrightness(g_sys.backlight);
         return;
     }
-    /* 铚傞福鍣ㄨ仈鍔锛氶暱鎸夋椂鍙鍝嶄竴澹帮紙鐢 btn_down 杈规部鍘婚噸锛 */
+    /* 铚傞福鍣ㄨ仈鍔锛氭瘡娆″瓒″洖浜嬩欢鎾竴澹帮紙寤烘寜宸叉敼涓轰竴娆℃垰浣忓彧浜т竴娆 LONG_PRESS,
+     * 鏃堕棿灞傚凡鍘婚噸, 杩欓噷涓嶅啀鐢 btn_down 杈圭紪鍒ゆ柇, 鍚﹀垯绗簩娆′笉鍝嶋紒 */
     if (g_sys.buzzer_link && !MusicPlay_IsPlaying()) { /* TIM3 shared with music */
-        static uint8_t last_beep_btn = 0;
-        if (evt == ENC_EVT_LONG_PRESS) {
-            if (btn_down != last_beep_btn) {
-                last_beep_btn = btn_down;
-                Buzzer_Beep(20);
-            }
-        } else {
-            if (btn_down == 0) last_beep_btn = 0;
-            Buzzer_Beep(20);
-        }
+        Buzzer_Beep(20);
     }
 
     if (g_sys.current_screen != last_proc_screen) {
@@ -425,14 +428,10 @@ case SCREEN_MAIN:
             else if (g_sys.selected_item == 4) { g_sys.selected_item = 0; g_sys.current_screen = SCREEN_TIME_ADJUST; }
         }
         else if (evt == ENC_EVT_LONG_PRESS && g_sys.selected_item == 1) {
-            /* 婀垮害鍗★細闀挎寜鍒囨崲寮濮/鍋滄锛堜粎涓娆/姣忔℃寜鍘嬶紝btn_down 澶嶄綅鏃惰嚜鍔ㄩ噸缃锛 */
-            static uint8_t hum_last = 0;
-            if (btn_down == 0) hum_last = 0;
-            if (btn_down != hum_last) {
-                hum_last = btn_down;
-                if (g_sys.drying_active) StopDrying();
-                else StartDrying();
-            }
+            /* 婀垮害鍗★細闀挎寜鍒囨崲寮濮/鍋滄锛堟瘡娆″ undエ璧峰彧浜х敓涓 LONG_PRESS,
+             * 鐩存帴 toggle 鍗冲彲, 涓嶉渶 btn_down 杈圭紪鍘诲搷 */
+            if (g_sys.drying_active) StopDrying();
+            else StartDrying();
         }
         break;
 
@@ -1053,8 +1052,7 @@ uint8_t is_tmc = (g_sys.params.motor_driver == MOTOR_DRIVER_TMC2208 ||
                 /* 上传弹窗活动: 旋转无效; 单击按状态(1=开AP 2=关闭; 3/4/5 不打断) */
                 if (evt == ENC_EVT_CLICK) {
                     if (g_sys.lang_popup == 1) {
-                        EspLink_LangOpenAp();
-                        g_sys.lang_popup = 2;
+                        EspLink_LangOpenAp();   /* 仅发命令: 等待 +LANGAP 确认后 esp_link 置 popup=2 */
                     } else if (g_sys.lang_popup == 2) {   /* 未传输可退出: 关AP回设置 */
                         EspLink_LangCloseAp();
                         LangOta_Abort();
@@ -1132,7 +1130,7 @@ case SCREEN_MUSIC:
         else if (evt == ENC_EVT_CCW) { enc_accel_step = 1; UI_MusicScroll(-1); }
         else if (evt == ENC_EVT_CLICK) {
             if (g_sys.selected_item == 0) {           /* 涓婁紶闊充箰 */
-                EspLink_MusicOpenAp();               /* single click: open AP popup=2 */
+                g_sys.music_popup = 1;                /* 先进入“待开启”：再单击才真正开 AP(等 +MUSICAP 确认) */
             } else if (g_sys.selected_item == 1) {    /* 闊充箰鍒楄〃 */
                 g_sys.selected_item = 0;
                 g_sys.pixel_offset = 0;

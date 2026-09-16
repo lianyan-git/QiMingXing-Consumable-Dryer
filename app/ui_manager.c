@@ -9,6 +9,7 @@
 #include "bsp_rgb_led.h"
 #include "bsp_cs1237.h"
 #include "bsp_stepper.h"
+#include "bsp_ptc.h"
 #include "system_time.h"
 #include "stm32f10x.h"
 #include "esp_link.h"
@@ -571,7 +572,8 @@ void UI_ShowBootScreen(void)
 
             /* 鍙妫娴 NTC 娓╁害 > 鍐峰嵈娓╁害 鈫 寮椋庢墖 */
             if (g_sys.ptc_temp > (float)g_sys.params.ptc_cooling_temp) {
-                Fan_SetSpeed(100);
+                PTC_SetPower(0);   /* 安全: NTC 超冷却温度, 先关加热 */
+                Fan_SetSpeed(100); /* 同时开风扇散热 */
                 fan_cooling = 1;
             }
         }

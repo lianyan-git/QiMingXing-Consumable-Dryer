@@ -250,6 +250,21 @@ A: 确认背光引脚（PB0）配置为推挽输出并置高。若硬件上背�
 
 ## 更新日志
 
+### 2026-09-16
+
+#### 新增
+- **音乐 / 字库上传收流与语言上传同构（逐包 Poll FSM）**：`music_store.c` 手写 4 态写盘 FSM（擦扇区→擦 WIP→写页→页 WIP），握手指记录、`MusicStore_WritePacket` 拷包排队、`Poll` 每主循环推进、busy 让出、**本包全部落盘才补 ACK**，杜绝整包阻塞导致 UART 溢出丢包；`main.c` 主循环同时推进 `MusicOta_Poll` + `LangOta_Poll`（字库写盘不再依赖 EspLink 状态）
+- **AP 开启严格按 ESP01S 确认**：音乐 / 字库「上传」先弹待开启弹窗（popup=1），单击才发 `AT+MUSICAP`/`AT+LANGAP`；**必须收到 ESP 回 `+MUSICAP`/`+LANGAP` 确认行** 才切 popup=2 显示热点名 `QIMINGXING`/`192.168.4.1`（esp_link 新增 `+LANGAP` 分支，BOOT 后发命令不再提前置弹窗）
+- **BOOT 超时自动复位**：`EspLink_Process` 中 `ESPLINK_BOOT` 8 秒收不到 `OK` 强制断电 1s→上电 3s→重进 BOOT，解决「上传失败后 AP 打不开、需多次重启」；改用文件级时间戳（无 RAM 残留，即使掉电不彻底也不会误判）
+- **PTC 加热许可收敛**：`PTC_Init` 显式 `ptc_engaged=0` + `CCR1=0`，抹掉掉电残留（灯板电容导致的 RAM 遗留不再跳过 engage）；`StartDrying` 在 safety 激活时禁止启动、`StopDrying` 清 safety，杜绝「关闭后反而加热」的 toggle 反转
+- **编码器长按去重**：一次物理长按只报一次 `LONG_PRESS`（按住超时 / 松开超时二选一，`btn_long_reported` 防重），湿度卡长按 toggle 单次执行、蜂鸣每次长按响应一声
+
+#### 修复
+- **音乐上传卡 0 / 握手后无 ACK**：`MusicStore_AbortUpload` / `MusicOta fail()` 复位写 FSM 与收流状态（之前残留 `s_st` 非 0 会吞掉下次握手字节）；`+MUSICAP` 会话建立前先 `LangOta_Abort` + `MusicOta_Init` 清历史残留
+- **字库上传卡 0（网页在传、主机无动静）**：`LangOta_Poll` 加入主循环（原先只在 EspLink_Process 尾调用，EspLink 状态卡住时写盘永不推进）；补 `+LANGAP` 确认分支
+- **上电/进 BL 后概率加热反向**：多次实测定位为 PA8 动态 GPIO↔AF 切换在复位窗口不可靠；`PTC_Init` 显式清 `ptc_engaged` 并强制低电平，engage 仅在首次 `SetPower(>0)` 执行
+- **RGB 上电随机点亮几颗**：`RGB_Strip_Init` 对两条灯带各连发 8 颗全黑帧（原 RGB2 只发 1 颗，复位浮空毛刺锁存的灯珠无法被覆盖熄灭）；`Board_EarlyInit` 开机最早钳低 PB6/PB7
+
 ### 2026-09-15
 
 #### 新增

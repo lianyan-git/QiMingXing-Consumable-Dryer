@@ -92,11 +92,13 @@ void RGB_Strip_Init(void)
     GPIO_Init(PIN_RGB2_PORT, &g);
     GPIO_ResetBits(PIN_RGB2_PORT, PIN_RGB2_PIN | PIN_RGB3_PIN);
 
-    /* 上电连发几次全黑关灯 */
-    uint8_t black[3] = {0, 0, 0};
-    ws2812_send_pixels(black, 1, PIN_RGB2_PORT, PIN_RGB2_PIN);
-    ws2812_send_pixels(black, 1, PIN_RGB3_PORT, PIN_RGB3_PIN);
-    ws2812_send_pixels(black, 7, PIN_RGB3_PORT, PIN_RGB3_PIN);
+    /* 上电连发几次全黑关灯: 必须按灯珠总数(8颗/条)发送, 否则复位瞬间浮空毛刺
+     * 已被灯带锁存点亮的灯珠无法被后续黑帧覆盖, 读条期间会残留点亮几颗 */
+    uint8_t black[24] = {0};
+    ws2812_send_pixels(black, 8, PIN_RGB2_PORT, PIN_RGB2_PIN);
+    ws2812_send_pixels(black, 8, PIN_RGB3_PORT, PIN_RGB3_PIN);
+    ws2812_send_pixels(black, 8, PIN_RGB2_PORT, PIN_RGB2_PIN);
+    ws2812_send_pixels(black, 8, PIN_RGB3_PORT, PIN_RGB3_PIN);
 }
 
 static uint8_t rgb_scale(uint8_t c, uint8_t bright)

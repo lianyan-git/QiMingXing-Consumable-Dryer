@@ -7,6 +7,28 @@
             "path": "."
         }
     ],
-    "settings": {},
+    "settings": {
+        "C_Cpp.default.includePath": [
+            "E:/启明星烘干箱/固件/STM32F103C8T6_V0.1_OTA_source_20260730/app",
+            "E:/启明星烘干箱/固件/STM32F103C8T6_V0.1_OTA_source_20260730/board",
+            "E:/启明星烘干箱/固件/STM32F103C8T6_V0.1_OTA_source_20260730/bootloader",
+            "E:/启明星烘干箱/固件/STM32F103C8T6_V0.1_OTA_source_20260730/bsp",
+            "E:/启明星烘干箱/固件/STM32F103C8T6_V0.1_OTA_source_20260730/module",
+            "E:/启明星烘干箱/固件/STM32F103C8T6_V0.1_OTA_source_20260730/shared",
+            "E:/启明星烘干箱/固件/STM32F103C8T6_V0.1_OTA_source_20260730/libraries/CMSIS/CM3/CoreSupport",
+            "E:/启明星烘干箱/固件/STM32F103C8T6_V0.1_OTA_source_20260730/libraries/CMSIS/CM3/DeviceSupport/ST/STM32F10x",
+            "E:/启明星烘干箱/固件/STM32F103C8T6_V0.1_OTA_source_20260730/libraries/STM32F10x_StdPeriph_Driver/inc",
+            "E:/启明星烘干箱/固件/STM32F103C8T6_V0.1_OTA_source_20260730/project/MDK(V5)/.cmsis/include"
+        ],
+        "C_Cpp.default.defines": [
+            "STM32F10X_MD",
+            "USE_STDPERIPH_DRIVER"
+        ],
+        "files.exclude": {
+            "project/MDK(V5)/build/**": true,
+            "build/**": true,
+            "**/*.bin": false
+        }
+    },
     "extensions": {}
 }
