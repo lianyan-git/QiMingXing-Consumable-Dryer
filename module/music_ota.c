@@ -44,6 +44,16 @@ static uint32_t s_last_act  = 0;
 static uint8_t  s_crchi_tmp = 0;
 static uint32_t s_crc_expect = 0;
 
+/* 调试计数（与 lang_ota 同构）：卡 0% 时据此定位断点——
+ * GotHand=0 → 握手没完成；GotHand=1 且 Recv=0 → 第一个包未走完 写入→ACK；
+ * Recv>0 而界面不动 → UI/ESP 侧问题。
+ * s_fail=失败原因: 0无 1=10s超时 2=UART溢出中止 3=BeginUpload拒 4=写盘FSM失败
+ *              5=size非法 6=END-CRC不符 7=Finish(落盘校验)失败 */
+static uint8_t  s_dbg_hand = 0;
+static uint16_t s_dbg_ack  = 0;
+static uint16_t s_dbg_nak  = 0;
+static uint8_t  s_fail     = 0;
+
 static uint16_t crc16_modbus(uint16_t crc, uint8_t b)
 {
     crc ^= b;
@@ -55,6 +65,8 @@ static void ack(uint8_t ok)
 {
     uint8_t c = ok ? 0x06 : 0x15;
     EspUart_Write(&c, 1, 100);
+    if (ok) { if (s_dbg_ack < 65535U) s_dbg_ack++; }
+    else    { if (s_dbg_nak < 65535U) s_dbg_nak++; }
 }
 
 /* 收流完成/失败：退出 EspLink 二进制路由，恢复正常行协议（+MUSICOK 等行可被解析） */
@@ -66,28 +78,38 @@ static void leave_active(void)
 
 /* 失败统一处理: 必须 leave_active() 退出接收态.
  * 否则 s_active 卡 1 → EspLink 将后续 ESP 全部字节丢弃(WiFi/AP/弹窗全冻结). */
-static void fail(void)
+static void fail(uint8_t reason)
 {
     MusicStore_AbortUpload();   /* 复位写 FSM, 防止残留阻塞下次握手 */
     leave_active();
     s_error = 1;
+    s_fail = reason;
     s_st = S_IDLE;
+    s_wr_pend = 0;
     g_sys.music_popup = 5;   /* 失败态: 帧循环自动收起 */
 }
 
 void MusicOta_Init(void)
 {
-    s_st = S_IDLE; s_active = 0; s_error = 0;
+    s_st = S_IDLE; s_active = 0; s_error = 0; s_wr_pend = 0; s_fail = 0;
 }
 
 void MusicOta_Abort(void)
 {
+    if (s_active) s_fail = 2;   /* 会话进行中被外部清掉: 仅溢出中止路径会发生 */
     MusicStore_AbortUpload();
-    s_st = S_IDLE; s_active = 0; s_error = 1;
+    s_st = S_IDLE; s_active = 0; s_error = 1; s_wr_pend = 0;
 }
 
 uint8_t MusicOta_Active(void) { return s_active; }
 uint8_t MusicOta_Error(void)   { return s_error; }
+uint8_t  MusicOta_GotHand(void) { return s_dbg_hand; }
+uint16_t MusicOta_GetAck(void)  { return s_dbg_ack; }
+uint16_t MusicOta_GetNak(void)  { return s_dbg_nak; }
+uint32_t MusicOta_GetRecv(void) { return s_recv; }
+uint32_t MusicOta_GetTotal(void) { return s_total; }
+uint8_t  MusicOta_GetState(void) { return s_st; }
+uint8_t  MusicOta_GetFail(void)  { return s_fail; }
 
 /* 逐字节喂入 */
 void MusicOta_FeedByte(uint8_t b)
@@ -113,11 +135,13 @@ void MusicOta_FeedByte(uint8_t b)
     case S_SIZE3: s_total |= (uint32_t)b << 8;  s_st = S_SIZE4; break;
     case S_SIZE4:
         s_total |= (uint32_t)b;
-        if (s_total == 0 || s_total > MUSIC_MAX_FILE_SIZE) { ack(0); fail(); break; }
+        if (s_total == 0 || s_total > MUSIC_MAX_FILE_SIZE) { ack(0); fail(5); break; }
         /* 与语言上传同构: 握手立即 ACK, 擦除延迟到每包 Poll 懒做 */
-        if (MusicStore_BeginUpload(s_total) != 0) { ack(0); fail(); break; }
+        if (MusicStore_BeginUpload(s_total) != 0) { ack(0); fail(3); break; }
         s_recv = 0; s_exp_seq = 0; s_crc = 0xFFFFFFFFUL;
-        s_pkt_len = 0; s_pkt_need = 0; s_active = 1; s_error = 0;
+        s_pkt_len = 0; s_pkt_need = 0; s_active = 1; s_error = 0; s_fail = 0;
+        s_dbg_hand = 1; s_dbg_ack = 0; s_dbg_nak = 0;   /* 调试计数按本次会话清零 */
+        EspUart_ResetOverflow();  /* 新会话起点: 丢弃会话建立前粘滞的旧溢出标志, 防止刚握手就被误杀 */
         g_sys.music_popup = 3;                  /* 弹窗切上传中 */
         g_sys.music_upload_total = s_total;
         g_sys.music_upload_recv = 0;
@@ -138,7 +162,7 @@ void MusicOta_FeedByte(uint8_t b)
             uint32_t remain = s_total - s_recv;
             s_pkt_need = (remain > MT_PKT_MAX) ? MT_PKT_MAX : remain;
         }
-        if (s_pkt_need == 0) { ack(0); fail(); break; }
+        if (s_pkt_need == 0) { ack(0); fail(5); break; }
         s_st = S_PKT_DATA;
         break;
     case S_PKT_DATA:
@@ -170,8 +194,9 @@ void MusicOta_FeedByte(uint8_t b)
                 for (int j = 0; j < 8; j++) s_crc = (s_crc & 1) ? (s_crc >> 1) ^ 0xEDB88320UL : (s_crc >> 1);
             }
             /* 与语言上传同构: 包排入 MusicStore 写 FSM, 由 Poll 落盘后再补 ACK */
-            if (MusicStore_WritePacket(s_pkt, s_pkt_len) != 0) { ack(0); fail(); break; }
-            s_st = S_IDLE;               /* 写盘期间不解析新字节(FeedByte busy 让出, Poll 完成后回 S_PKT_AA) */
+            if (MusicStore_WritePacket(s_pkt, s_pkt_len) != 0) { ack(0); fail(4); break; }
+            s_wr_pend = 1;   /* 必须置位: 否则 Poll 永不推进 MusicStore FSM → 不 ACK、进度卡 0% */
+            s_st = S_IDLE;   /* 写盘期间不解析新字节(FeedByte busy 让出, Poll 完成后回 S_PKT_AA) */
         } else {
             ack(0); s_st = S_PKT_AA;   /* 尾字节错: NAK 让 ESP 重传 */
         }
@@ -180,7 +205,7 @@ void MusicOta_FeedByte(uint8_t b)
     case S_END_AA: s_st = (b == 0xAA) ? S_END_55 : S_IDLE; break;
     case S_END_55: s_st = (b == 0x55) ? S_END_TYPE : (b == 0xAA ? S_END_AA : S_IDLE); break;
     case S_END_TYPE:
-        if (b != F_END) { ack(0); fail(); break; }
+        if (b != F_END) { ack(0); fail(6); break; }
         s_crc_expect = 0;
         s_st = S_END_CRC1;
         break;
@@ -191,11 +216,11 @@ void MusicOta_FeedByte(uint8_t b)
         s_crc_expect |= (uint32_t)b;
         if (~s_crc != s_crc_expect) {
             leave_active();
-            ack(0); s_error = 1; s_st = S_IDLE; break;
+            ack(0); s_error = 1; s_fail = 6; s_st = S_IDLE; break;
         }
         if (MusicStore_Finish(~s_crc, s_total) != 0) {
             leave_active();
-            ack(0); s_error = 1; s_st = S_IDLE; break;
+            ack(0); s_error = 1; s_fail = 7; s_st = S_IDLE; break;
         }
         g_sys.music_upload_pct = 100;
         g_sys.music_popup = 4;      /* 完成态：帧循环 1.8s 后自动收起 */
@@ -229,7 +254,7 @@ void MusicOta_Poll(void)
             ack(1);
             s_st = (s_recv >= s_total) ? S_END_AA : S_PKT_AA;
         } else if (pw < 0) {
-            fail();
+            fail(4);
         }
         return;   /* 写盘期间不检查空闲超时(ESP 等我们 ACK, 不会发包) */
     }
@@ -237,7 +262,7 @@ void MusicOta_Poll(void)
     if (s_active && (uint32_t)(SystemTime_Millis() - s_last_act) > 10000U) {
         MusicStore_AbortUpload();
         leave_active();
-        s_error = 1; s_st = S_IDLE;
+        s_error = 1; s_st = S_IDLE; s_wr_pend = 0; s_fail = 1;
         g_sys.music_popup = 5;    /* 下载失败提示 */
     }
 }

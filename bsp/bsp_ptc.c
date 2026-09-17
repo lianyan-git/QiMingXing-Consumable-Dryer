@@ -90,6 +90,19 @@ void PTC_SetPower(uint8_t percent)
     if (percent > 100) percent = 100;
     if (percent == 0) {
         TIM_SetCompare1(PTC_PWM_TIM, 0);
+        /* 硬件级保险: 0% 不只靠 CCR=0 的"定时器驱动低", 直接把 PA8 退回普通
+         * 推挽输出低——AF 脚在 CCR 残留/重映射破坏/输出使能异常等任何一侧失手时
+         * 都可能变成弱驱动(实测: 关烘干后 PTC 半导通、LED 偏暗), 引脚物理 0V
+         * 才是真关断。下次 >0% 走 ptc_engage() 自动切回 AF。 */
+        if (ptc_engaged) {
+            GPIO_InitTypeDef g;
+            g.GPIO_Pin = PIN_PTC_PWM_PIN;
+            g.GPIO_Mode = GPIO_Mode_Out_PP;
+            g.GPIO_Speed = GPIO_Speed_2MHz;
+            GPIO_Init(PIN_PTC_PWM_PORT, &g);
+            GPIO_ResetBits(PIN_PTC_PWM_PORT, PIN_PTC_PWM_PIN);
+            ptc_engaged = 0;
+        }
         return;
     }
     ptc_engage();
@@ -107,7 +120,7 @@ static uint8_t tp_rising = 0, tp_have_trough = 0;
 static uint32_t tp_last_peak_time = 0;
 
 /* 自动校准阶段机（元件 at_ / 空气 tp_ 各一套）：
- * 目标 5 个计数峰（≈5 次升降循环，ZN 推荐多次振荡取平均更稳），
+ * 目标 5 个计数峰（≈5 次升降循环，继电器振荡法多次测量取平均更稳），
  * 进度实时 20%/峰；第 5 峰 → 99%（后台计算+写Flash+落库）→ 100% 驻留 1.2s
  * 让页面刷新显示新 PID 值 → 结束。abort/超时也尽量用已积累的均值落盘。 */
 #define AT_TARGET_PEAKS 5
@@ -124,19 +137,24 @@ static void tuner_accum(uint8_t *cnt, float *sum_p, float *sum_a, float period, 
     if (period > 0.5f && amp > 0.0f) { *sum_p += period; *sum_a += amp; (*cnt)++; }
 }
 
-/* 由累计均值算 ZN 参数：amp/cnt, per/cnt → out_kp/ki/kd（cnt=0 时仅用传入值兜底） */
-static void tuner_zn(float sum_p, float sum_a, uint8_t cnt, float period, float amp,
+/* 由累计均值算保守型 PID 参数：amp/cnt, per/cnt → out_kp/ki/kd（cnt=0 时仅用传入值兜底）。
+ * 两点修正（原为经典 ZN 且幅值取 100%，导致参数整体偏大约 2 倍、恒温过冲）：
+ * 1. 继电器幅值 d：输出摆幅 0%↔100%，等幅振荡按中点计 d=50%，非 100%。
+ *    Ku = 4d/(pi*A)。
+ * 2. 参数整定改用 Tyreus-Luyben（保守型）：Kp=0.45Ku, Ti=2.2Pu, Td=Pu/6.3，
+ *    比经典 ZN(0.6Ku/Pu2/Pu8) 明显温和，适配 PTC+风扇+箱体大热惯性对象。 */
+static void tuner_conservative(float sum_p, float sum_a, uint8_t cnt, float period, float amp,
                      float *kp, float *ki, float *kd)
 {
     float a = (cnt >= 2U) ? (sum_a / (float)cnt) : amp;
     float t = (cnt >= 2U) ? (sum_p / (float)cnt) : period;
     float ku;
-    if (a <= 0.0f) a = 0.5f;
+    if (a < 0.5f) a = 0.5f;   /* 摆幅带压窄到 ±1℃ 后防测得过小: a 下限 0.5℃ 保 Ku 不爆 */
     if (t <= 0.0f) t = 0.5f;
-    ku = (4.0f * 100.0f) / (3.14159f * a);
-    *kp = 0.6f * ku;
-    *ki = 2.0f * (*kp) / t;
-    *kd = (*kp) * t / 8.0f;
+    ku = (4.0f * 50.0f) / (3.14159f * a);   /* d=50%：0↔100 继电器按中点幅值 */
+    *kp = 0.45f * ku;
+    *ki = (*kp) / (2.2f * t);
+    *kd = (*kp) * t / 6.3f;
 }
 
 void PTC_PID_AutotuneStart(void)
@@ -175,7 +193,7 @@ uint8_t PTC_PID_AutotuneProcess(void)
     if (at_stage == 0 && g_sys.ptc_temp >= (float)PTC_TEMP_MAX) {
         if (at_meas_cnt >= 2U) {
             float kp, ki, kd;
-            tuner_zn(at_sum_period, at_sum_amp, at_meas_cnt, 0.0f, 0.0f, &kp, &ki, &kd);
+            tuner_conservative(at_sum_period, at_sum_amp, at_meas_cnt, 0.0f, 0.0f, &kp, &ki, &kd);
             measured_kp = kp; measured_ki = ki; measured_kd = kd;
             g_sys.params.pid_ntc_kp = kp;
             g_sys.params.pid_ntc_ki = ki;
@@ -191,16 +209,26 @@ uint8_t PTC_PID_AutotuneProcess(void)
     float temp = (float)NTC_GetTemperature() / 10.0f;
     uint32_t now = SystemTime_Millis();
 
+    /* item#4 自整定独立 NTC 有效性闸: 开路线圈读域外哨兵(-99.9)会被振荡相0误判
+     * "未升温"而 100% 连烧, 且 control_update 的 160 闸基于同样冻结的显示值——
+     * 自整定绕开常规保护, 必须在此当场检查。越界立即断电+风扇满速+失败(不落库)。 */
+    if (temp < (float)NTC_READ_LO_10C / 10.0f || temp > (float)NTC_READ_HI_10C / 10.0f) {
+        PTC_SetPower(0);
+        Fan_SetSpeed(100);
+        autotune_done = 1; autotune_running = 0; autotune_progress = 100;
+        return 1;
+    }
+
 /* 振荡控制：0=升温, 1=降温 反复切换；提交/驻留阶段(at_stage>=1)保持断电 */
     if (at_stage >= 1U) {
         PTC_SetPower(0);
     } else if (autotune_phase == 0) {
-        if (temp >= (float)(g_sys.params.ptc_max_temp - 3)) {
+        if (temp >= (float)g_sys.params.ptc_max_temp + 1.0f) {  /* 校准只在设定±1℃带内振荡(用户要求, 不再高1~3℃工作) */
             PTC_SetPower(0);
             autotune_phase = 1;
         }
     } else if (autotune_phase == 1) {
-        if (temp <= (float)(g_sys.params.ptc_max_temp - 8)) {   /* 5℃摆幅 */
+        if (temp <= (float)g_sys.params.ptc_max_temp - 1.0f) {   /* 2℃摆幅，振荡中心=目标 */
             PTC_SetPower(100);
             autotune_phase = 0;      /* 回到升温 */
         }
@@ -258,9 +286,9 @@ uint8_t PTC_PID_AutotuneProcess(void)
     }
 
     if (at_stage == 1) {
-        /* 用 4 组(周期,幅值)均值计算 ZN；不足两组时退回单组兜底 */
+        /* 用 4 组(周期,幅值)均值算保守 PID；不足两组时退回单组兜底 */
         float kp, ki, kd;
-        tuner_zn(at_sum_period, at_sum_amp, at_meas_cnt,
+        tuner_conservative(at_sum_period, at_sum_amp, at_meas_cnt,
                  oscillation_period, oscillation_amplitude, &kp, &ki, &kd);
         measured_kp = kp; measured_ki = ki; measured_kd = kd;
         g_sys.params.pid_ntc_kp = kp;
@@ -285,7 +313,7 @@ uint8_t PTC_PID_AutotuneProcess(void)
         /* 超时：已有均值数据则按均值落盘，避免空跑结束 */
         if (at_meas_cnt >= 2U) {
             float kp, ki, kd;
-            tuner_zn(at_sum_period, at_sum_amp, at_meas_cnt, 0.0f, 0.0f, &kp, &ki, &kd);
+            tuner_conservative(at_sum_period, at_sum_amp, at_meas_cnt, 0.0f, 0.0f, &kp, &ki, &kd);
             measured_kp = kp; measured_ki = ki; measured_kd = kd;
             g_sys.params.pid_ntc_kp = kp;
             g_sys.params.pid_ntc_ki = ki;
@@ -382,7 +410,7 @@ uint8_t PTC_TempPID_AutotuneProcess(void)
         if (tp_stage == 0 && g_sys.ptc_temp >= (float)PTC_TEMP_MAX) {
             if (tp_meas_cnt >= 2U) {
                 float kp, ki, kd;
-                tuner_zn(tp_sum_period, tp_sum_amp, tp_meas_cnt, 0.0f, 0.0f, &kp, &ki, &kd);
+                tuner_conservative(tp_sum_period, tp_sum_amp, tp_meas_cnt, 0.0f, 0.0f, &kp, &ki, &kd);
                 g_sys.params.pid_air_kp = kp;
                 g_sys.params.pid_air_ki = ki;
                 g_sys.params.pid_air_kd = kd;
@@ -397,6 +425,20 @@ uint8_t PTC_TempPID_AutotuneProcess(void)
         float temp = g_sys.current_temp;
         uint32_t now = SystemTime_Millis();
 
+        /* item#4: 空气自整定的元件侧保护依赖 g_sys.ptc_temp, 而 NTC 开路/短路时
+         * read_sensors 会冻结该缓存 → 上方 160 闸失效(元件实际温度不可信)。
+         * 每拍独立直读 NTC 判域, 越界立即断电+风扇满速+失败(不落库)。 */
+        {
+            float ntc_now = (float)NTC_GetTemperature() / 10.0f;
+            if (ntc_now < (float)NTC_READ_LO_10C / 10.0f ||
+                ntc_now > (float)NTC_READ_HI_10C / 10.0f) {
+                PTC_SetPower(0);
+                Fan_SetSpeed(100);
+                temp_pid_done = 1; temp_pid_running = 0; temp_pid_progress = 100;
+                return 1;
+            }
+        }
+
         /* 阶段机：0=测量（每峰 +20% 实时刷新）→ 第5峰 99% 提交 → 100% 驻留后结束 */
         if (tp_stage == 0) {
             temp_pid_progress = (uint8_t)(temp_pid_peak_count * 20);
@@ -408,9 +450,9 @@ uint8_t PTC_TempPID_AutotuneProcess(void)
         }
 
         if (tp_stage == 1) {
-            /* 用均值计算 ZN 并落库（阻塞式同步写，返回即已写入参数文件） */
+            /* 用均值计算保守 PID 并落库（阻塞式同步写，返回即已写入参数文件） */
             float kp, ki, kd;
-            tuner_zn(tp_sum_period, tp_sum_amp, tp_meas_cnt,
+            tuner_conservative(tp_sum_period, tp_sum_amp, tp_meas_cnt,
                      temp_pid_period, temp_pid_amplitude, &kp, &ki, &kd);
             g_sys.params.pid_air_kp = kp;
             g_sys.params.pid_air_ki = ki;
@@ -435,7 +477,7 @@ uint8_t PTC_TempPID_AutotuneProcess(void)
         } else if (temp_pid_phase == 0) {
             /* 加热相位：元件按 ptc_max_temp 受控（烘干流程式），空气持续升温 */
             PTC_SetPower(temp_pid_ntc_power());
-            if (temp >= temp_pid_target - 1.0f) {   /* 空气升到目标-1℃ -> 断电降温 */
+            if (temp >= temp_pid_target + 2.0f) {   /* 空气升到目标+2℃ -> 断电降温（振荡中心=目标） */
                 PTC_SetPower(0);
                 temp_pid_phase = 1;
             }
@@ -444,7 +486,7 @@ uint8_t PTC_TempPID_AutotuneProcess(void)
             /* 降温阶段风扇保持 100%：风机一停，元件余热把空气继续顶温、
              * 自然冷却又极慢（>摆幅死区），峰迟迟不形成 → 进度 50 后超时消失、参数不落 */
             Fan_SetSpeed(100);
-            if (temp <= temp_pid_target - 5.0f) {   /* 降温到目标-5℃ -> 再升温（4℃摆幅） */
+            if (temp <= temp_pid_target - 2.0f) {   /* 降温到目标-2℃ -> 再升温（4℃摆幅，中心对齐目标） */
                 temp_pid_phase = 0;
             }
         }
@@ -491,7 +533,7 @@ uint8_t PTC_TempPID_AutotuneProcess(void)
         if (tp_stage == 0 && (now - temp_pid_start_ms) > 1800000U) {   /* 总超时30min：空气环升温+5轮摆幅本来就慢 */
             if (tp_meas_cnt >= 2U) {
                 float kp, ki, kd;
-                tuner_zn(tp_sum_period, tp_sum_amp, tp_meas_cnt, 0.0f, 0.0f, &kp, &ki, &kd);
+                tuner_conservative(tp_sum_period, tp_sum_amp, tp_meas_cnt, 0.0f, 0.0f, &kp, &ki, &kd);
                 g_sys.params.pid_air_kp = kp;
                 g_sys.params.pid_air_ki = ki;
                 g_sys.params.pid_air_kd = kd;

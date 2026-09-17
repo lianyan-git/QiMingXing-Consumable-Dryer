@@ -215,8 +215,34 @@ def solo_freq2(name):
 
 # =====================================================================
 # 3) 恋爱吧少女 — 简谱 (1=#C), 半音偏移度, ()低八度 【】高八度, b=降, -=延长
+# 2026-09-17: 简谱内嵌(不再依赖外部 txt, 原外部文件内容不对导致单音)
 # =====================================================================
-JIANPU_TEXT = open(r'E:\启明星烘干箱\固件\恋爱吧少女.txt', encoding='utf-8-sig').read()
+JIANPU_TEXT = """1=#C
+BPM=112
+34b55 3 (77)432
+34b55 3 (77)【1】53
+34b55 3 11 543 41146
+【1】641-34b55
+
+11121234321
+1112121(767)
+11121234321
+(67)1(6)1(6)1(6)1 b65
+3455531 1(7)1(6)32
+345553 b765654434
+56544345
+b64b64b6【1】7-
+2567526 65b55
+3b55 2b55 656576
+7526 65b55 3b55555
+2b5565b556 b55-
+5b5565b557
+3b55 b35【1】765-
+
+34b55 3 (77)432
+34b55 3 (77)【1】5
+34b55 3 11 543
+4114567【1143】"""
 
 
 def jianpu_parse(text):
@@ -241,14 +267,28 @@ def jianpu_parse(text):
     out = []          # (freq, dur_units)
     last_freq = 0
     dur = 250.0       # 每拍时长 ms
+    bpm = None        # BPM=112: 每行=1小节=4拍, 音符均分, 时值=240000/BPM/行音符数
+    line_notes = 0
     cur = []          # pending note with accumulated units
     for ln in lines:
+        m = re.match(r'^D\s*=\s*([0-9]+(?:\.[0-9]+)?)$', ln)
+        if m:
+            dur = float(m.group(1))   # 段落调速指令: "D=200" 改变其后音符时值(ms)
+            continue
+        m = re.match(r'^BPM\s*=\s*([0-9]+(?:\.[0-9]+)?)$', ln)
+        if m:
+            bpm = float(m.group(1))   # 对音轨模式: 每行=1小节=4拍
+            continue
+        line_notes = len(re.findall(r'\d', re.sub(r'[b#\-]', '', re.sub(r'[()【】]', '', ln))))
+        note_dur = dur
+        if bpm and line_notes > 0:
+            note_dur = 240000.0 / bpm / line_notes
         i = 0
         while i < len(ln):
             c = ln[i]
             if c == '-':                      # 延长前一音
                 if cur:
-                    cur[1] += dur
+                    cur[1] += note_dur
                 i += 1
                 continue
             if c == ' ':                      # 空格: 提交当前音(若存在)
@@ -262,10 +302,10 @@ def jianpu_parse(text):
                 for g in grp:
                     if g.isdigit():
                         deg = int(g)
-                        freq = 261.6256 * 2 ** ((60 + key_off + major[deg - 1] - 12) / 12.0)
+                        freq = 261.6256 * 2 ** ((key_off + major[deg - 1] - 12) / 12.0)
                         if cur:
                             out.append((cur[0], int(cur[1])))
-                        cur = [int(round(freq)), dur]
+                        cur = [int(round(freq)), note_dur]
                     elif g == 'b' or g == '#':
                         pass  # handled by prefix marker below
                 i = j + 1
@@ -278,10 +318,10 @@ def jianpu_parse(text):
                 for g in grp:
                     if g.isdigit():
                         deg = int(g)
-                        freq = 261.6256 * 2 ** ((60 + key_off + major[deg - 1] + 12) / 12.0)
+                        freq = 261.6256 * 2 ** ((key_off + major[deg - 1] + 12) / 12.0)
                         if cur:
                             out.append((cur[0], int(cur[1])))
-                        cur = [int(round(freq)), dur]
+                        cur = [int(round(freq)), note_dur]
                 i = j + 1
                 continue
             if c.isdigit():                   # 普通音符 (可能前导 b/#)
@@ -292,10 +332,10 @@ def jianpu_parse(text):
                     off = 1
                 else:
                     off = 0
-                freq = 261.6256 * 2 ** ((60 + key_off + major[deg - 1] + off) / 12.0)
+                freq = 261.6256 * 2 ** ((key_off + major[deg - 1] + off) / 12.0)
                 if cur:
                     out.append((cur[0], int(cur[1])))
-                cur = [int(round(freq)), dur]
+                cur = [int(round(freq)), note_dur]
                 i += 1
                 continue
             i += 1

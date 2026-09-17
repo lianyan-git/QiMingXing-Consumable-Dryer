@@ -114,6 +114,7 @@ void LangOta_FeedByte(uint8_t b)
         s_pkt_len = 0; s_pkt_need = 0;
         s_max_sec = 0xFFFFFFFFUL;
         s_active = 1; s_dbg_hand = 1; s_end_stat = 0;
+        EspUart_ResetOverflow();  /* 新会话起点: 清粘滞旧溢出标志, 防刚握手即被 overflow 中止误杀 */
         s_max_sec = 0xFFFFFFFFUL;
         /* 握手立即 ACK: ESP 不再空等, 浏览器进度立刻走;
          * 擦除放到每个数据包抵达时由 Poll 异步懒擦(4KB/次 ~75ms), 不占用 ESP 缓冲 */
@@ -169,9 +170,17 @@ void LangOta_FeedByte(uint8_t b)
     case S_END_CRC3: s_crc_expect |= (uint32_t)b << 8;  s_st = S_END_CRC4; break;
     case S_END_CRC4:
         s_crc_expect |= (uint32_t)b;
-        if (s_recv != s_total) { s_end_stat = 4; ack(0); s_st = S_END_AA; break; }  /* 数据不完整不提交 */
-        if (~s_crc != s_crc_expect) s_end_stat = 2;  /* CRC 不一致: 记录, 但逐包 CRC16 已验证完整, 仍提交 */
-        if (LangMarkValid(s_base) != 0) { s_end_stat = 3; ack(0); s_st = S_END_AA; break; }  /* flag 写失败重试 */
+    if (s_recv != s_total) { s_end_stat = 4; ack(0); s_st = S_END_AA; break; }  /* 数据不完整不提交 */
+    if (~s_crc != s_crc_expect) {
+        /* 总 CRC32 不一致 → 拒绝提交(不再写 VALID): 损坏文件不得被当成成功字库。
+         * 逐包 CRC16 只保证传输完整, 不保证文件本身正确; 此前仅记录 s_end_stat=2
+         * 仍继续 LangMarkValid, 损坏字库会被 UI 当成功启用(P1 修复)。 */
+        s_end_stat = 2;
+        ack(0);
+        lang_fail();
+        break;
+    }
+    if (LangMarkValid(s_base) != 0) { s_end_stat = 3; ack(0); s_st = S_END_AA; break; }  /* flag 写失败重试 */
         if (s_end_stat == 0) s_end_stat = 1;
         g_sys.lang_download_done = 1;
         g_sys.lang_ap_active = 0;
@@ -201,6 +210,16 @@ void LangOta_Poll(void)
 {
     uint8_t sr1;
     uint32_t n;
+
+    /* #2: 收包状态(S_PKT_AA..S_PKT_55)等 ESP 下一包时若链路断开, 20s 超时统一终止。
+     * 原来只有 S_END 组带超时, 收包态没有 → s_active 永久卡 1:
+     * EspLink 的 "上传中丢弃其它字节" 门会连带冻结整条 ESP 链路。
+     * 擦/写状态(S_ER 与 S_PG 组)不查——那是本地 SPI 忙, 非等待对端。 */
+    if (s_active && s_st >= S_PKT_AA && s_st <= S_PKT_55 &&
+        (uint32_t)(SystemTime_Millis() - s_last_act) > 20000U) {
+        lang_fail();
+        return;
+    }
 
     switch (s_st) {
     case S_ER_KICK:

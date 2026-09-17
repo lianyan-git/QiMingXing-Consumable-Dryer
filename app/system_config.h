@@ -120,7 +120,7 @@ typedef struct {
     uint8_t motor_oscillate;
     uint16_t motor_oscillate_angle;   // 平台摆动实际角度 1-360 deg (默认60)
     uint8_t motor_driver;
-    uint8_t motor_current;            // x100 (0.2-0.6A)
+    uint8_t motor_current;            // x10 档位(2=0.2A..6=0.6A); TMC CS 档位近似非线性，见 bsp_stepper.c
     uint8_t motor_stealthchop;
     uint16_t motor_work_count;        // 工作次数 0-1000, 0=一直工作, 每工作N次休息
     uint16_t motor_rest_sec;          // 休息时长 0-600s, 0=不休息(工作次数非0才生效)
@@ -179,6 +179,7 @@ typedef struct {
     uint32_t device_id;
 
     SafetyState_t safety_state;
+    uint8_t ntc_valid;             /* 当前拍 NTC 域内有效(0=开路/短路/ADC异常) — 安全闸用, 非 params */
     uint8_t fan_speed;
     float ptc_temp_last;
     float chamber_temp_last;

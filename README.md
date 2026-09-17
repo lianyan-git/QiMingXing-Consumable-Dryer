@@ -250,6 +250,33 @@ A: 确认背光引脚（PB0）配置为推挽输出并置高。若硬件上背�
 
 ## 更新日志
 
+### 2026-09-18
+
+#### 新增
+- **音乐库更新为 6 首内置 + 恋歌简谱重构**：`tools/music/music_pack.mub` 重建为 6 首合包（群青/孤独摇滚/恋爱吧少女/Bad Apple/LOVE_2000/晴天），`恋爱吧少女` 按用户简谱内嵌生成（`JIANPU_TEXT` 不再依赖外部 txt，新增 `BPM=` 段速指令支持行内调速）；修复简谱解析频率公式 +60（MIDI 偏移当指数阶）导致的 5 个八度高频尖叫；`music.sct`/`gen_music_fw.py` 同步 6 首布局（Music.bin 10152B）
+- **TMC UART 位时序改为硬件计时**：弃用"空循环+运行时校准"（校准中断环境与事务不一致 → 采样逐位漂移 → F2），改为直接读 `SysTick->VAL` 硬件计数（`tmc_wait_us`，与中断开关/-O0 无关）；TX 改推挽输出（高电平主动驱动、不依赖外部上拉）；RX 采样点取位宽 3/4 抗慢沿；读请求发完立即切 RX 自等起始沿（消除固定 SENDDELAY 与芯片实际回复时序偏差）
+- **TMC 诊断分级 + 线路自检**：电机步进中禁做任何 UART（Probe/ComOk/DRV_STATUS/SetSilent 全部跳步沿用缓存）；每 1s 轻量单读 IFCNT、每 5s 完整 Probe（读→GSTAT 无害写→读）；电机页标题栏右上角状态徽章（`TMC OK n=x` / `TMC F2 0800H/L`，H/L=PB15 空闲电平自检）；最近失败分类（F1=零边沿线路死、F2=有边沿但解错）+ 原始回复首字节诊断码
+- **TMC 配置移出启动路径**：`Stepper_Enable` 不再执行任何 UART 事务（消除按开始→等 UART→喂狗断→复位→电机不转的连锁）；配置改为停机空闲窗口后台限流执行（`tmc_background_service`，每 2s 至多一次 + 前后喂狗），失败仅标记 `TMC-COM FAIL` 不影响 EN/STEP/DIR 运转；新增 MS1/MS2 从机地址 0-3 自动探测（当前地址无应答时扫描）
+- **NTC 测量域/哨兵/保护重构**：`NTC_READ_LO/HI`（-40~200℃ 测量域）与 `NTC_ERR_OPEN/SHORT`（±9999 域外哨兵）分离，修正短路哨兵 1200 与真实 120℃ 混叠、IsValid 把 120℃+ 判异常误触发安全停机的问题；`control_update` 普通烘干路径新增"当前拍 NTC 无效→立即断热+风扇满速"P0 闸（2s 只负责升级为正式安全告警）；160℃ 绝对闸与哨兵判据统一 `>=`、全链同语义
+- **上传稳定性**：字库 `S_PKT_*` 收包态补 20s 全局超时（原仅 S_END 组有，断线会永久卡 s_active=1）；`wait_idle` 加 5s 超时+错误传播；音乐弹窗进度居中 + `"%d%"` 格式修复；上传会话期间冻结 RGB 灯效并主动熄灯（WS2812 关中断窗口撞 UART 字节→ORE 丢包的根治），会话结束恢复
+- **CAN 从机 WiFi 恢复**：从机入网强制关 WiFi 后，主机失联/关闭 CAN 时按"曾被 CAN 强制关闭"标志恢复 WiFi（不覆盖用户手动关闭）；CAN 远程设置参数与本地校验统一（SET_TIME/SET_TEMP 边界）
+
+#### 变更
+- **删除旧 HTTP/Web 架构**：`mod_web_server` / `esp_at` / `esp_http_bridge` / `http_server` / `ota_http` 及其头文件全部移除（旧网页服务器、旧 ESP 命令层、旧 OTA-HTTP 链路均为死代码，当前主链路为 `EspLink→ESP 自定义二进制协议→内部/外部 Flash`）；同步清理 `eide.yml` 三个 target 的源文件项与 excludeList
+- **`mod_ota` 瘦身**：仅保留 `OTA_EnterBootloader()`（写升级标志+软复位），删除旧"先写外部 Flash 再升级"残留（OTA_ReceiveChunk/TriggerUpgrade/CRC32_Update 等）
+- **删除旧字库写入 API**：`LangBeginWrite/LangWriteAt` 移除（上传链路已走 `LangOta→SfudFlash` 分步擦写），保留 `LangInit/LangTargetBase/LangMarkValid` 等在用接口；`LangMarkValid` 提交新区后作废旧区（NOR AND 清零 flag），并带代际号双保险，解决"上传新库重启后仍选旧区"的确定性 BUG
+- **item11 浮点 printf 瘦身**：`ui_manager.c` + `esp_link.c` push_dev 全部 `%.1f/%.2f` 改为手工整数定点拼串（`ui_d1/ui_d2/ui_tenths/ui_pid_line`，PID 计算/参数/传感器仍用 float），彻底断掉 MicroLIB 浮点打印链——**Code 95492→93292（−2200B），bin 102616→100292（−2324B）**
+- **字库最终 CRC32 不一致拒绝提交**：结束帧 CRC 校验失败即 `ack(0)+lang_fail()`，不再"记录后仍写 VALID"
+- **开启烘干立即倒计时**：HEATING/DRYING 两阶段都走倒计时（临时策略，传感器摆放修正后可按注释恢复"到温才计时"）；恒温带移到设定下方 0~1℃
+- **电机休息期断使能**：进入休息（次数到限/过温）EN 释放松轴，重启前重新使能
+
+#### 修复
+- **P0 160℃ 绝对过热闸缺 return**：`control_update` 过温断功率后直接 return，防止落入下方 switch 被 PID 重新开功率（"无条件断功率"此前形同虚设）
+- **TMC 使能路径阻塞看门狗**：旧 `Stepper_Enable→tmc_configure→地址扫描` 在 UART 不通时最坏数百 ms 阻塞主循环→IWDG 复位→电机不转；配置改后台后按开始立即转
+- **SysTick 屏蔽失效（越界 UB）**：`NVIC_DisableIRQ(SysTick_IRQn)` 中 SysTick_IRQn=-1 属越界未定义行为（实际遮不住还会越界写 NVIC），改 `SysTick->CTRL` 寄存器 TICKINT 位控制
+- **字库 AB 双区旧区压制新区**：重启后 LangInit 恒优先 A 导致刚上传的新库不生效——提交新库后作废旧区 flag（双保险加代际号取新）
+- **音乐"恋爱吧少女"只有一个音调**：简谱源外部 txt 内容异常致解析单音→简谱内嵌常量；另修 jianpu_parse 频率公式多算 +60（5 个八度尖叫）
+
 ### 2026-09-16
 
 #### 新增

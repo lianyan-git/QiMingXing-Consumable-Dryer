@@ -71,15 +71,19 @@ int16_t NTC_GetTemperature(void)
     for (int i = 0; i < 8; i++) sum += adc_read_channel(ADC_Channel_2);
     uint16_t adc = (uint16_t)(sum / 8);
 
-    if (adc >= 4090) return -200;
-    if (adc <= 10)   return 1200;
+    /* 异常哨兵必须移出真实测量域 [-400,2000](= -40.0..200.0℃)：
+     * 旧值 -200/1200 与真实 -20℃/120℃ 同值，120℃以上读数会被 IsValid
+     * 误判异常 → 烘干 2s 误触发安全停机（ptc_max 可配 40~160℃ 时必现）。
+     * 160℃ 的绝对保护在控制层(control_update/校准 abort)，传感器只负责测量。 */
+    if (adc >= 4090) return NTC_ERR_OPEN;    /* 开路/线松 */
+    if (adc <= 10)   return NTC_ERR_SHORT;   /* 短路 */
 
     float R = 10000.0f * (float)adc / (4095.0f - (float)adc);
     float invT = 1.0f / 298.15f + (1.0f / 3950.0f) * logf(R / 100000.0f);
     float tempC = 1.0f / invT - 273.15f;
 
     if (tempC < -40.0f) tempC = -40.0f;
-    if (tempC > 200.0f) tempC = 200.0f;   /* 上限放宽到200℃，避免 PTC 温度被卡在125 */
+    if (tempC > 200.0f) tempC = 200.0f;   /* 测量域到 200℃；160℃软件绝对闸在控制层 */
 
     /* 轻量平滑（10Hz 采样下响应更快，避免腔内温度"一度一度慢慢爬"） */
     static float filtered = -999.0f;
@@ -98,7 +102,7 @@ uint8_t NTC_IsOverTemp(void)
 uint8_t NTC_IsValid(void)
 {
     int16_t t = NTC_GetTemperature();
-    /* NTC_GetTemperature 异常映射: adc>=4090 → -200(开路) / adc<=10 → 1200(短路) */
-    return (t > (int16_t)-200) && (t < (int16_t)1200);
+    /* 有效域=真实测量域 -40.0..200.0℃；哨兵(-9999/9999)天然在域外 */
+    return (t >= NTC_READ_LO_10C && t <= NTC_READ_HI_10C) ? 1 : 0;
 }
 #endif

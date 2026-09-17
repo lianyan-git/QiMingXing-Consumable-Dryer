@@ -16,7 +16,7 @@
 #include "system_config.h"
 #include "system_time.h"
 #include "bsp_can.h"
-#include "mod_wifi_manager.h"
+#include "esp_link.h"
 #include "can_cluster.h"
 #include <string.h>
 
@@ -210,7 +210,8 @@ static void on_ack(const uint8_t *data)
     s_slot = data[5];
     if (!s_wifi_off_done) {
         s_wifi_off_done = 1;
-        WiFiManager_Stop();          /* 被连接进主设备网络那一刻立即关闭 WiFi */
+        g_sys.wifi_enabled = 0;
+        EspLink_OnToggle(0);         /* 被连接进主设备网络那一刻立即关闭 WiFi（AT+WEBCLOSE 后 ESP 断电） */
     }
 }
 

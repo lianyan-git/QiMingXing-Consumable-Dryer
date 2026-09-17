@@ -306,20 +306,64 @@ int MusicStore_GetTrack(uint16_t idx, MusicTrackEntry_t *e)
     return 0;
 }
 
+/* 曲名读取 —— name_off 语义修复：
+ * music_format.h 规定曲目项 name_off 是"相对名称区"的偏移(name_table_off 字段, 头 0x14)，
+ * 新打包器按 spec 输出；历史旧包写的是文件绝对偏移。必须按"文件"而不是按"单轨"判定约定：
+ * 用轨道0 作锚点 —— 相对式文件 track0 的 name_off 必为 0(名称区首字节)，
+ * 绝对式文件 track0 的 name_off 必为名称区基址(>=0x24)。逐轨猜大小会把
+ * "绝对值恰小于名称区总长"的轨(如 LOVE_2000)误判成相对 → 读进音符区出乱码字。 */
 int MusicStore_GetName(uint16_t idx, char *buf, uint16_t buflen)
 {
     MusicTrackEntry_t e;
-    uint16_t i;
-    uint8_t ch;
+    uint8_t h[8], a0[4], ch;
+    uint32_t nto, ntn, abs_off, t0_off;
+    uint16_t i, len;
     if (!s_has_fw || idx >= MusicStore_TrackCount() || buflen < 2) return -1;
     if (MusicStore_GetTrack(idx, &e) != 0) return -1;
-    if (e.name_off >= s_file_size || e.name_off < MUB_HDR_SIZE) return -1;
-    if (e.name_len > buflen - 1) e.name_len = (uint16_t)(buflen - 1);
-    for (i = 0; i < e.name_len; i++) {
-        if (SfudFlash_Read(MUSIC_DATA_BASE + e.name_off + i, &ch, 1) != 0) { buf[i] = 0; return -1; }
+    if (SfudFlash_Read(MUSIC_DATA_BASE + 0x14U, h, 8) != 0) return -1;  /* name_table_off + size */
+    nto = (uint32_t)h[0] | ((uint32_t)h[1] << 8) | ((uint32_t)h[2] << 16) | ((uint32_t)h[3] << 24);
+    ntn = (uint32_t)h[4] | ((uint32_t)h[5] << 8) | ((uint32_t)h[6] << 16) | ((uint32_t)h[7] << 24);
+    if (nto < MUB_HDR_SIZE + (uint32_t)MusicStore_TrackCount() * MUB_TRACK_ENTRY || nto >= s_file_size)
+        nto = MUB_HDR_SIZE + (uint32_t)MusicStore_TrackCount() * MUB_TRACK_ENTRY;  /* 头字段非法兜底 */
+    if (ntn == 0U || nto + ntn > s_file_size) ntn = s_file_size - nto;
+    if (SfudFlash_Read(MUSIC_DATA_BASE + MUB_HDR_SIZE + 8U, a0, 4) != 0) return -1;  /* track0 name_off */
+    t0_off = (uint32_t)a0[0] | ((uint32_t)a0[1] << 8) | ((uint32_t)a0[2] << 16) | ((uint32_t)a0[3] << 24);
+    len = e.name_len;
+    if (len > (uint16_t)(buflen - 1U)) len = (uint16_t)(buflen - 1U);
+    abs_off = 0xFFFFFFFFUL;
+    if (t0_off < nto) {                       /* 相对式文件 */
+        if (e.name_off < ntn && nto + e.name_off + (uint32_t)len <= s_file_size)
+            abs_off = nto + e.name_off;
+    } else {                                  /* 绝对式文件 */
+        if (e.name_off >= nto && e.name_off + (uint32_t)len <= s_file_size)
+            abs_off = e.name_off;
+    }
+    if (abs_off == 0xFFFFFFFFUL) {            /* 锚点异常/混合: 退回逐轨双候选择优 */
+        if (e.name_off + (uint32_t)len <= s_file_size && e.name_off >= nto)
+            abs_off = e.name_off;
+        else if (e.name_off < ntn && nto + e.name_off + (uint32_t)len <= s_file_size)
+            abs_off = nto + e.name_off;
+        else return -1;
+    }
+    for (i = 0; i < len; i++) {
+        if (SfudFlash_Read(MUSIC_DATA_BASE + abs_off + i, &ch, 1) != 0) { buf[i] = 0; return -1; }
         buf[i] = (char)ch;
     }
-    buf[i] = 0;
+    {   /* buflen 截断可能把多字节 UTF-8 汉字拦腰切掉: 丢弃尾部不完整序列, 避免渲染乱码 */
+        uint16_t s = 0U;
+        uint16_t complete = 0U;
+        while (s < len) {
+            uint8_t b0 = (uint8_t)buf[s];
+            uint16_t sz = (b0 < 0x80U) ? 1U :
+                          (b0 >= 0xE0U) ? 3U :
+                          (b0 >= 0xC0U) ? 2U : 1U;
+            if ((uint32_t)s + sz > (uint32_t)len) break;
+            s = (uint16_t)(s + sz);
+            complete = s;
+        }
+        len = complete;
+    }
+    buf[len] = 0;
     return 0;
 }
 

@@ -87,6 +87,11 @@ void EspUart_ClearRx(void)
     rx_overflow = 0;
 }
 
+void EspUart_ResetOverflow(void)
+{
+    rx_overflow = 0;
+}
+
 void EspUart_RxIrqHandler(void)
 {
     /* 溢出（ORE）：CPU 在内部 Flash 擦写期间被 stall，单字节接收寄存器

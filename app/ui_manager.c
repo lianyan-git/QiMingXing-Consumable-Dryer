@@ -559,9 +559,13 @@ void UI_ShowBootScreen(void)
             float t, h;
             if (SHT40_Read(&t, &h) == 0) {
                 g_sys.current_temp = t;
-                g_sys.current_humidity = h;
-            }
-            g_sys.ptc_temp = (float)NTC_GetTemperature() / 10.0f;
+        g_sys.current_humidity = h;
+    }
+    {
+        int16_t r = NTC_GetTemperature();
+        if (r >= NTC_READ_LO_10C && r <= NTC_READ_HI_10C)
+            g_sys.ptc_temp = (float)r / 10.0f;   /* 哨兵不进显示(保持上一有效) */
+    }
 
             /* 寮鏈鸿嚜鍔ㄥ幓鐨 + 璇诲彇閲嶉噺锛屽睆骞曚寒璧峰墠鍗＄墖鍗虫湁璇绘暟 */
             CS1237_Tare();
@@ -597,8 +601,10 @@ void UI_ShowBootScreen(void)
         }
 
         /* 70% 鏃跺嶆煡 NTC */
-        if (pct == 70 && fan_cooling) {
-            g_sys.ptc_temp = (float)NTC_GetTemperature() / 10.0f;
+    if (pct == 70 && fan_cooling) {
+        int16_t r2 = NTC_GetTemperature();
+        if (r2 >= NTC_READ_LO_10C && r2 <= NTC_READ_HI_10C)
+            g_sys.ptc_temp = (float)r2 / 10.0f;
             if (g_sys.ptc_temp <= (float)g_sys.params.ptc_cooling_temp) {
                 Fan_SetSpeed(0);
                 fan_cooling = 0;
@@ -732,6 +738,71 @@ static void draw_main_card(uint8_t item, uint16_t x, uint16_t y,
 }
 
 /* 灞閮ㄥ埛鏂板崟寮犱富鐣岄潰鍗＄墖锛堜笉鏁村睆閲嶇粯锛孲GL 鑴忕煩褰㈡濊矾锛 */
+/* ==== 显示格式化: 手工整数拼串(替代 %f 族 sprintf) ====
+ * MicroLIB 只要镜像中存在任何一处 %.Nf 就会链入 ~2KB 浮点输出路径;
+ * PID/传感器/参数照常使用 float, 仅"生成显示字符串"改整数定点数位,
+ * 十分位输入下输出与 %f 完全一致(round-half-up)。链式追加, ui_fin() 封口。 */
+static char *ui_cpy(char *p, const char *s) { while (*s) *p++ = *s++; return p; }
+static char *ui_fin(char *p) { *p = 0; return p; }
+
+static char *ui_itoa(char *p, uint32_t v)
+{
+    char tmp[11];
+    uint8_t k = 0;
+    do { tmp[k++] = (char)('0' + (v % 10U)); v /= 10U; } while (v);
+    while (k) *p++ = tmp[--k];
+    return p;
+}
+
+/* 十分位整数 → "x.y" */
+static char *ui_tenths(char *p, uint32_t tenth)
+{
+    p = ui_itoa(p, tenth / 10U);
+    *p++ = '.'; *p++ = (char)('0' + (tenth % 10U));
+    return p;
+}
+
+/* float → 一位小数 "x.y" */
+static char *ui_d1(char *p, float v)
+{
+    int32_t n;
+    if (v < 0.0f) { *p++ = '-'; v = -v; }
+    n = (int32_t)(v * 10.0f + 0.5f);
+    return ui_tenths(p, (uint32_t)n);
+}
+
+/* float → 两位小数 "x.yy" */
+static char *ui_d2(char *p, float v)
+{
+    int32_t n;
+    uint32_t w, f;
+    if (v < 0.0f) { *p++ = '-'; v = -v; }
+    n = (int32_t)(v * 100.0f + 0.5f);
+    w = (uint32_t)n / 100U; f = (uint32_t)n % 100U;
+    p = ui_itoa(p, w);
+    *p++ = '.';
+    *p++ = (char)('0' + f / 10U);
+    *p++ = (char)('0' + f % 10U);
+    return p;
+}
+
+/* 校准页汇总行 "KP:x.xx KI:x.xx KD:x.xx" */
+static void ui_pid_line(char *buf, float kp, float ki, float kd)
+{
+    char *p = buf;
+    p = ui_d2(ui_cpy(p, "KP:"), kp);
+    p = ui_d2(ui_cpy(p, " KI:"), ki);
+    p = ui_d2(ui_cpy(p, " KD:"), kd);
+    *p = 0;
+}
+
+/* PID 调整页单行 "KP:x.x" */
+static void ui_pid_row1(char *buf, const char *tag, float v)
+{
+    char *p = ui_d1(ui_cpy(buf, tag), v);
+    *p = 0;
+}
+
 void UI_RefreshCard(uint8_t item)
 {
     char buf[32];
@@ -750,7 +821,8 @@ void UI_RefreshCard(uint8_t item)
         hh = g_sys.params.dry_time_sec / 3600;
         mm = (g_sys.params.dry_time_sec % 3600) / 60;
         ss = g_sys.params.dry_time_sec % 60;
-        if (g_sys.run_state == STATE_DRYING || g_sys.run_state == STATE_COOLING) {
+        if (g_sys.run_state == STATE_HEATING || g_sys.run_state == STATE_DRYING ||
+            g_sys.run_state == STATE_COOLING) {   /* 开启烘干即倒计时(HEATING 也显示剩余) */
             /* 鐑樺共涓锛氫富鏄剧ず鍓╀綑鍊掕℃椂锛堝ぇ瀛楋級锛屼笂鏂逛笉鍐嶆斁璁惧畾灏忓瓧閬垮厤涓庣姸鎬佹枃瀛楅噸鍙 */
             hh = g_sys.remaining_sec / 3600;
             mm = (g_sys.remaining_sec % 3600) / 60;
@@ -768,12 +840,12 @@ void UI_RefreshCard(uint8_t item)
 
     switch (item) {
     case 0:
-        sprintf(buf, "%.1f", g_sys.current_temp);
+        ui_fin(ui_d1(buf, g_sys.current_temp));
         draw_main_card(0, x, y, w, h, CARD_BG_TEMP, buf, UI_WARN,
                        g_sys.selected_item == 0);
         break;
     case 1:
-        sprintf(buf, "%.1f%%", g_sys.current_humidity);
+        ui_fin(ui_cpy(ui_d1(buf, g_sys.current_humidity), "%"));
         draw_main_card(1, x, y, w, h, CARD_BG_HUMI, buf, UI_CYAN,
                        g_sys.selected_item == 1);
         break;
@@ -801,12 +873,12 @@ void UI_DrawMainScreen(void)
     TFT_FillScreen(UI_BG);
 
     /* 鈹鈹 鍗1 TEMP 117x42 @(2,2) 鈹鈹 */
-    sprintf(buf, "%.1f", g_sys.current_temp);
+    ui_fin(ui_d1(buf, g_sys.current_temp));
     draw_main_card(0, 2, 2, 117, 42, CARD_BG_TEMP, buf, UI_WARN,
                    g_sys.selected_item == 0);
 
     /* 鈹鈹 鍗2 婀垮害 117x42 @(121,2) 鈹鈹 */
-    sprintf(buf, "%.1f%%", g_sys.current_humidity);
+    ui_fin(ui_cpy(ui_d1(buf, g_sys.current_humidity), "%"));
     draw_main_card(1, 121, 2, 117, 42, CARD_BG_HUMI, buf, UI_CYAN,
                    g_sys.selected_item == 1);
 
@@ -831,7 +903,8 @@ void UI_DrawMainScreen(void)
     h = g_sys.params.dry_time_sec / 3600;
     m = (g_sys.params.dry_time_sec % 3600) / 60;
     s = g_sys.params.dry_time_sec % 60;
-    if (g_sys.run_state == STATE_DRYING || g_sys.run_state == STATE_COOLING) {
+    if (g_sys.run_state == STATE_HEATING || g_sys.run_state == STATE_DRYING ||
+        g_sys.run_state == STATE_COOLING) {
         h = g_sys.remaining_sec / 3600;
         m = (g_sys.remaining_sec % 3600) / 60;
         s = g_sys.remaining_sec % 60;
@@ -951,11 +1024,10 @@ void UI_DrawTempPid(void)
         TFT_DrawString((TFT_WIDTH - (uint16_t)(strlen(buf) * 12U)) / 2U, 86, buf, UI_TEXT, UI_BG, 2);
     } else {
         TFT_DrawStringZh((TFT_WIDTH - zh_str_width("单击开始校准")) / 2U, 46, "单击开始校准", COLOR_YELLOW, UI_BG);
-        sprintf(buf, "KP:%.2f KI:%.2f KD:%.2f", g_sys.params.pid_air_kp, g_sys.params.pid_air_ki, g_sys.params.pid_air_kd);
+        ui_pid_line(buf, g_sys.params.pid_air_kp, g_sys.params.pid_air_ki, g_sys.params.pid_air_kd);
         TFT_DrawString((TFT_WIDTH - (uint16_t)(strlen(buf) * 12U)) / 2U, 86, buf, COLOR_CYAN, UI_BG, 2);
     }
-    draw_tune_live(3);
-}
+    draw_tune_live(3);}
 
 void UI_DrawTimeAdjust(void)
 {
@@ -1090,7 +1162,7 @@ void UI_DrawPidAutotune(void)
         TFT_DrawString((TFT_WIDTH - (uint16_t)(strlen(buf) * 12U)) / 2U, 86, buf, UI_TEXT, UI_BG, 2);
     }     else {
         TFT_DrawStringZh((TFT_WIDTH - zh_str_width("单击开始校准")) / 2U, 46, "单击开始校准", COLOR_YELLOW, UI_BG);
-        sprintf(buf, "KP:%.2f KI:%.2f KD:%.2f", g_sys.params.pid_ntc_kp, g_sys.params.pid_ntc_ki, g_sys.params.pid_ntc_kd);
+        ui_pid_line(buf, g_sys.params.pid_ntc_kp, g_sys.params.pid_ntc_ki, g_sys.params.pid_ntc_kd);
         TFT_DrawString((TFT_WIDTH - (uint16_t)(strlen(buf) * 12U)) / 2U, 86, buf, COLOR_CYAN, UI_BG, 2);
     }
     draw_tune_live(3);
@@ -1112,9 +1184,9 @@ static void pid_adj_draw_row(uint8_t i)
 {
     char buf[24];
     uint16_t y = (uint16_t)(42 + (uint16_t)i * 18);
-    if (i == 0) sprintf(buf, "KP:%.1f", *pid_row_val(0));
-    else if (i == 1) sprintf(buf, "KI:%.1f", *pid_row_val(1));
-    else sprintf(buf, "KD:%.1f", *pid_row_val(2));
+    if (i == 0) ui_pid_row1(buf, "KP:", *pid_row_val(0));
+    else if (i == 1) ui_pid_row1(buf, "KI:", *pid_row_val(1));
+    else ui_pid_row1(buf, "KD:", *pid_row_val(2));
     if (g_sys.selected_item == i || (i < 3U && g_sys.pid_edit_active == (uint8_t)(i + 1))) {
         TFT_FillRect(10, y, 130, 16, UI_ACCENT);
         TFT_DrawStringZh(10, y, buf, UI_TEXT, UI_ACCENT);
@@ -1375,14 +1447,14 @@ static void draw_tune_live(uint8_t which)
     /* which: 1=AIR(左) 2=PTC(右) 3=两者；对称分布，仅刷新变化的一侧，避免整行闪烁 */
     if (which & 1U) {
         uint16_t w, x;
-        sprintf(buf, "AIR %.1f C", g_sys.current_temp);
+        ui_fin(ui_cpy(ui_d1(ui_cpy(buf, "AIR "), g_sys.current_temp), " C"));
         w = (uint16_t)strlen(buf) * 6U; x = (uint16_t)(60U - w / 2U); if (x < 6U) x = 6U;
         TFT_FillRect(4, 106, 112, 13, UI_BG);
         TFT_DrawString(x, 108, buf, COLOR_CYAN, UI_BG, 1);
     }
     if (which & 2U) {
         uint16_t w, x;
-        sprintf(buf, "PTC %.1f C", g_sys.ptc_temp);
+        ui_fin(ui_cpy(ui_d1(ui_cpy(buf, "PTC "), g_sys.ptc_temp), " C"));
         w = (uint16_t)strlen(buf) * 6U; x = (uint16_t)(180U - w / 2U); if (x < 126U) x = 126U;
         TFT_FillRect(124, 106, 112, 13, UI_BG);
         TFT_DrawString(x, 108, buf, COLOR_GREEN, UI_BG, 1);
@@ -1407,9 +1479,9 @@ static void refresh_pid_row(uint8_t row)
     uint16_t y;
     if (row >= 3) return;
     y = (uint16_t)(42 + row * 18);
-    if (row == 0) sprintf(buf, "KP:%.1f", *pid_row_val(0));
-    else if (row == 1) sprintf(buf, "KI:%.1f", *pid_row_val(1));
-    else sprintf(buf, "KD:%.1f", *pid_row_val(2));
+    if (row == 0) ui_pid_row1(buf, "KP:", *pid_row_val(0));
+    else if (row == 1) ui_pid_row1(buf, "KI:", *pid_row_val(1));
+    else ui_pid_row1(buf, "KD:", *pid_row_val(2));
     TFT_FillRect(10, y, 130, 16, UI_BG);
     if (g_sys.pid_edit_active == (uint8_t)(row + 1)) {
         TFT_FillRect(10, y, 130, 16, UI_ACCENT);
@@ -1536,7 +1608,7 @@ static void motor_row_str(uint8_t i, char *buf)
     case 5: sprintf(buf, "次数:%d", g_sys.params.motor_work_count); break;
     case 6: sprintf(buf, "休息:%ds", g_sys.params.motor_rest_sec); break;
     case 7: sprintf(buf, "驱动:%s", drv); break;
-    case 8: sprintf(buf, "电流:%.1fA", (float)g_sys.params.motor_current / 10.0f); break;
+    case 8: ui_fin(ui_cpy(ui_tenths(ui_cpy(buf, "电流:"), g_sys.params.motor_current), "A")); break;
     case 9: sprintf(buf, "静音:%s", g_sys.params.motor_stealthchop ? "开" : "关"); break;
     default: buf[0] = 0; break;
     }
@@ -1560,15 +1632,27 @@ static uint8_t motor_slot_toggle_val(uint8_t slot)
 
 /* TMC 閫氳璇婃柇缂撳瓨锛氳繘鍏ョ數鏈洪〉/姣忕掕皟鐢 Stepper_TmcProbe 鏇存柊锛岄伩鍏嶆瘡琛岀粯鍒堕兘闃诲炶 UART銆
  * ok=1 閫氳鎴愬姛锛宑hip=IC 鐗堟湰(0x2208/0x2209/0x? )锛沷k=0 鏃朵繚鐣欎笂娆¤绘暟渚涙帓鏌ャ */
+/* TMC 通讯诊断缓存: 每 1s 轻量单读 IFCNT, 每 5s 做一次完整 Probe(读→无害写→读,
+ * 拿 IFCNT 计数); 步进中一律跳过、沿用旧值。g_tmc_ver=最近一次 Probe 回报的计数。 */
 static uint8_t  g_tmc_ok  = 0;
 static uint32_t g_tmc_ver = 0;
 
 static void tmc_probe_update(void)
 {
     uint32_t ver = 0;
-    uint8_t ok = Stepper_TmcProbe(&ver);
-    if (ok) { g_tmc_ok = 1; g_tmc_ver = ver; }
-    else    { g_tmc_ok = 0; }
+    uint8_t ok;
+    static uint32_t s_last_full = 0;
+    uint32_t now;
+    if (Stepper_IsRunning()) return;             /* 步进中禁做 UART 事务(丢步): 沿用旧值 */
+    now = SystemTime_Millis();
+    if ((uint32_t)(now - s_last_full) >= 5000U) {
+        s_last_full = now;
+        ok = Stepper_TmcProbe(&ver);
+        if (ok) { g_tmc_ok = 1; g_tmc_ver = ver; }
+        else    { g_tmc_ok = 0; }
+    } else {
+        g_tmc_ok = Stepper_TmcComOk();           /* 轻量级: 单帧校验应答 */
+    }
 }
 
 /* 缁樺埗/鍒锋柊搴曢儴璇婃柇琛岋紙scale1锛孉SCII锛夈侷FCNT 姣忕掗掑 鈬 鑺鐗囩‘瀹炲湪搴旂瓟銆 */
@@ -1576,14 +1660,19 @@ static void tmc_draw_diag(void)
 {
     char buf[28];
     uint16_t fg = g_tmc_ok ? COLOR_GREEN : COLOR_RED;
-    uint16_t box_y = 208;
-    fill_round_rect(5, box_y, 230, 22, UI_CARD, 6);
-    if (g_tmc_ok) {
-        sprintf(buf, "TMC-COM OK  CNT=%lu", (unsigned long)g_tmc_ver);
-    } else {
-        sprintf(buf, "TMC-COM FAIL");
+    /* 屏是 240x135(TFT_HEIGHT=135): 旧坐标 y=208 整条在屏外(2208 也永远看不到)。
+     * 改放"电机设置"标题行右侧徽章区 x156..239: 短文本, IFCNT 是 4bit 计数(0..15)。 */
+    TFT_FillRect(156, 8, 84, 15, UI_BG);
+    if (g_tmc_ok) sprintf(buf, "TMC OK n=%u", (unsigned)(g_tmc_ver & 0xFU));
+    else {
+        extern uint8_t Stepper_TmcErr(void);
+        extern uint16_t Stepper_TmcRaw16(void);
+        extern uint8_t Stepper_TmcLineIdle(void);
+        sprintf(buf, "TMC F%u %04X%c", (unsigned)Stepper_TmcErr(),
+                (unsigned)Stepper_TmcRaw16(),
+                Stepper_TmcLineIdle() ? 'H' : 'L');
     }
-    TFT_DrawString(8, box_y + 7, buf, fg, UI_CARD, 1);
+    TFT_DrawString(158, 12, buf, fg, UI_BG, 1);
 }
 
 /* 鐢垫満椤靛崟琛岀粯鍒讹細寮/鍏抽」鐢绘粦鍧楋紝鍏朵綑鐢绘枃鏈 */
@@ -1680,13 +1769,12 @@ void UI_DrawMotorAdjust(void)
     }
     draw_scrollbar(count, 5, (uint8_t)(g_sys.pixel_offset / SCR_ROW_H), SCR_VIEW_Y, SCR_VIEW_H);
 
-    /* TMC 椹卞姩锛氬簳閮ㄩ氳鐘舵佽瘖鏂琛岋紙scale2+鑳屾櫙妗嗭紝鏆楄壊涓嬫竻鏅板彲瑙侊級 */
+    /* TMC 驱动：标题行右上角通讯状态徽章(240x135 屏, 底部无空间 → 见 tmc_draw_diag) */
     {
-        uint16_t box_y = 208;
         if (is_tmc) {
             tmc_draw_diag();
         } else {
-            TFT_FillRect(5, box_y, 230, 22, UI_BG);
+            TFT_FillRect(156, 8, 84, 15, UI_BG);
         }
     }
 }
@@ -2376,11 +2464,11 @@ static void music_popup_refresh_progress(void)
     uint16_t py = 12;
     char buf[8];
     uint8_t pct = g_sys.music_upload_pct;
-    fill_round_rect((uint16_t)(px + 25), (uint16_t)(py + 40), 140, 14, UI_BG, 7);
-    if (pct) fill_round_rect((uint16_t)(px + 26), (uint16_t)(py + 41), (uint16_t)(138U * pct / 100U), 12, COLOR_GREEN, 6);
-    TFT_FillRect((uint16_t)(px + 45), (uint16_t)(py + 60), (uint16_t)(pw - 90), 12, UI_CARD);
-    sprintf(buf, "%d%", (int)pct);
-    TFT_DrawString((TFT_WIDTH - (uint16_t)(strlen(buf) * 6U)) / 2U, (uint16_t)(py + 62), buf, UI_FG_DIM, UI_CARD, 1);
+    fill_round_rect((uint16_t)(px + 25), (uint16_t)(py + 52), 140, 14, UI_BG, 7);
+    if (pct) fill_round_rect((uint16_t)(px + 26), (uint16_t)(py + 53), (uint16_t)(138U * pct / 100U), 12, COLOR_GREEN, 6);
+    TFT_FillRect((uint16_t)(px + 45), (uint16_t)(py + 70), (uint16_t)(pw - 90), 12, UI_CARD);
+    sprintf(buf, "%d%%", (int)pct);
+    TFT_DrawString((TFT_WIDTH - (uint16_t)(strlen(buf) * 6U)) / 2U, (uint16_t)(py + 72), buf, UI_FG_DIM, UI_CARD, 1);
 }
 
 void UI_DrawMusicPopup(void)
@@ -2399,13 +2487,13 @@ void UI_DrawMusicPopup(void)
         TFT_DrawString((TFT_WIDTH - 9 * 6U) / 2U, (uint16_t)(py + 66), "192.168.4.1", COLOR_GREEN, UI_CARD, 1);
         TFT_DrawStringZh((TFT_WIDTH - zh_str_width("点击关闭")) / 2U, (uint16_t)(py + 88), "点击关闭", UI_FG_DIM, UI_CARD);
     } else if (g_sys.music_popup == 3) {
-        TFT_DrawStringZh((TFT_WIDTH - zh_str_width("上传中")) / 2U, (uint16_t)(py + 14), "上传中", UI_FG, UI_CARD);
+        TFT_DrawStringZh((TFT_WIDTH - zh_str_width("上传中")) / 2U, (uint16_t)(py + 26), "上传中", UI_FG, UI_CARD);
         {
             uint8_t pct = g_sys.music_upload_pct;
-            fill_round_rect((uint16_t)(px + 25), (uint16_t)(py + 40), 140, 14, UI_BG, 7);
-            if (pct) fill_round_rect((uint16_t)(px + 26), (uint16_t)(py + 41), (uint16_t)(138U * pct / 100U), 12, COLOR_GREEN, 6);
+            fill_round_rect((uint16_t)(px + 25), (uint16_t)(py + 52), 140, 14, UI_BG, 7);
+            if (pct) fill_round_rect((uint16_t)(px + 26), (uint16_t)(py + 53), (uint16_t)(138U * pct / 100U), 12, COLOR_GREEN, 6);
             sprintf(buf, "%d%%", (int)pct);
-            TFT_DrawString((TFT_WIDTH - (uint16_t)(strlen(buf) * 6U)) / 2U, (uint16_t)(py + 62), buf, UI_FG_DIM, UI_CARD, 1);
+            TFT_DrawString((TFT_WIDTH - (uint16_t)(strlen(buf) * 6U)) / 2U, (uint16_t)(py + 72), buf, UI_FG_DIM, UI_CARD, 1);
         }
     } else if (g_sys.music_popup == 4) {
         TFT_DrawStringZh((TFT_WIDTH - zh_str_width("上传完成")) / 2U, (uint16_t)(py + 14), "上传完成", COLOR_GREEN, UI_CARD);
@@ -2433,11 +2521,11 @@ static void lang_popup_draw(void)
         TFT_DrawString((TFT_WIDTH - 9 * 6U) / 2U, (uint16_t)(py + 60), "192.168.4.1", COLOR_GREEN, UI_CARD, 1);
         TFT_DrawStringZh((TFT_WIDTH - zh_str_width("点击关闭")) / 2U, (uint16_t)(py + 84), "点击关闭", UI_FG_DIM, UI_CARD);
     } else if (g_sys.lang_popup == 3) {
-        TFT_DrawStringZh((TFT_WIDTH - zh_str_width("上传中")) / 2U, (uint16_t)(py + 14), "上传中", UI_FG, UI_CARD);
-        fill_round_rect((uint16_t)(px + 25), (uint16_t)(py + 40), 140, 14, UI_BG, 7);
-        if (pct) fill_round_rect((uint16_t)(px + 26), (uint16_t)(py + 41), (uint16_t)(138U * pct / 100U), 12, COLOR_GREEN, 6);
+        TFT_DrawStringZh((TFT_WIDTH - zh_str_width("上传中")) / 2U, (uint16_t)(py + 26), "上传中", UI_FG, UI_CARD);
+        fill_round_rect((uint16_t)(px + 25), (uint16_t)(py + 52), 140, 14, UI_BG, 7);
+        if (pct) fill_round_rect((uint16_t)(px + 26), (uint16_t)(py + 53), (uint16_t)(138U * pct / 100U), 12, COLOR_GREEN, 6);
         sprintf(buf, "%d%%", (int)pct);
-        TFT_DrawString((TFT_WIDTH - (uint16_t)(strlen(buf) * 6U)) / 2U, (uint16_t)(py + 62), buf, UI_FG_DIM, UI_CARD, 1);
+        TFT_DrawString((TFT_WIDTH - (uint16_t)(strlen(buf) * 6U)) / 2U, (uint16_t)(py + 72), buf, UI_FG_DIM, UI_CARD, 1);
     } else if (g_sys.lang_popup == 4) {
         TFT_DrawStringZh((TFT_WIDTH - zh_str_width("上传完成")) / 2U, (uint16_t)(py + 14), "上传完成", COLOR_GREEN, UI_CARD);
         TFT_DrawStringZh((TFT_WIDTH - zh_str_width("已存外部Flash")) / 2U, (uint16_t)(py + 44), "已存外部Flash", UI_FG_DIM, UI_CARD);
@@ -2455,11 +2543,11 @@ static void lang_popup_refresh_progress(void)
     char buf[8];
     uint8_t pct = LangOta_GetPct();
     g_sys.lang_upload_pct = pct;
-    fill_round_rect((uint16_t)(px + 25), (uint16_t)(py + 40), 140, 14, UI_BG, 7);
-    if (pct) fill_round_rect((uint16_t)(px + 26), (uint16_t)(py + 41), (uint16_t)(138U * pct / 100U), 12, COLOR_GREEN, 6);
-    TFT_FillRect((uint16_t)(px + 45), (uint16_t)(py + 60), (uint16_t)(pw - 90), 12, UI_CARD);
+    fill_round_rect((uint16_t)(px + 25), (uint16_t)(py + 52), 140, 14, UI_BG, 7);
+    if (pct) fill_round_rect((uint16_t)(px + 26), (uint16_t)(py + 53), (uint16_t)(138U * pct / 100U), 12, COLOR_GREEN, 6);
+    TFT_FillRect((uint16_t)(px + 45), (uint16_t)(py + 70), (uint16_t)(pw - 90), 12, UI_CARD);
     sprintf(buf, "%d%%", (int)pct);
-    TFT_DrawString((TFT_WIDTH - (uint16_t)(strlen(buf) * 6U)) / 2U, (uint16_t)(py + 62), buf, UI_FG_DIM, UI_CARD, 1);
+    TFT_DrawString((TFT_WIDTH - (uint16_t)(strlen(buf) * 6U)) / 2U, (uint16_t)(py + 72), buf, UI_FG_DIM, UI_CARD, 1);
 }
 
 void UI_DrawCanScreen(void)
@@ -3231,7 +3319,7 @@ void UI_UpdateMainDynamic(void)
 
     /* 鍗1 TEMP 117x42 @(2,2) */
     main_card_rect(0, &x, &y, &w, &ch);
-    sprintf(buf, "%.1f", g_sys.current_temp);
+    ui_fin(ui_d1(buf, g_sys.current_temp));
     if (strcmp(buf, last_val[0]) != 0) {
         draw_value_unit(0, x, y, ch,
                         (g_sys.selected_item == 0) ? UI_CARD_HI : CARD_BG_TEMP,
@@ -3241,7 +3329,7 @@ void UI_UpdateMainDynamic(void)
 
     /* 鍗2 婀垮害 117x42 @(121,2) */
     main_card_rect(1, &x, &y, &w, &ch);
-    sprintf(buf, "%.1f%%", g_sys.current_humidity);
+    ui_fin(ui_cpy(ui_d1(buf, g_sys.current_humidity), "%"));
     if (strcmp(buf, last_val[1]) != 0) {
         draw_value_unit(1, x, y, ch,
                         (g_sys.selected_item == 1) ? UI_CARD_HI : CARD_BG_HUMI,
@@ -3275,7 +3363,8 @@ void UI_UpdateMainDynamic(void)
     {
         static char last_rem_str[16] = "";
         uint16_t tbg = (g_sys.selected_item == 4) ? UI_CARD_HI : CARD_BG_TIME;
-        uint8_t drying = (g_sys.run_state == STATE_DRYING || g_sys.run_state == STATE_COOLING);
+        uint8_t drying = (g_sys.run_state == STATE_HEATING || g_sys.run_state == STATE_DRYING ||
+                          g_sys.run_state == STATE_COOLING);
         if (drying) {
             h = g_sys.remaining_sec / 3600;
             m = (g_sys.remaining_sec % 3600) / 60;

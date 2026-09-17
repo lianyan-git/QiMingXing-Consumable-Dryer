@@ -22,9 +22,12 @@ void Stepper_Move(int32_t steps);
 void Stepper_SetOscillate(int32_t steps);
 void Stepper_Update(void);
 void Stepper_SyncProfile(void);            /* 从最新参数重建运动曲线（下一转动周期生效） */
-void Stepper_SetSilent(uint8_t en);        /* TMC stealthChop 静音开关（CHOPCONF bit30） */
+void Stepper_SetSilent(uint8_t en);        /* TMC stealthChop 静音开关（GCONF bit2，0=StealthChop）；步进中调用被忽略，下次使能生效 */
 uint8_t Stepper_IsRunning(void);
 uint8_t Stepper_TmcComOk(void);
-uint8_t Stepper_TmcProbe(uint32_t *ifcnt);   /* 连读两次 IFCNT 确认递增：1=通讯真实成功并回报计数 */
+uint8_t  Stepper_TmcProbe(uint32_t *ifcnt);   /* 连读两次 IFCNT 确认递增：1=通讯真实成功并回报计数 */
+uint8_t  Stepper_TmcErr(void);                /* 最近失败分类: 0无 1零边沿(线路/上拉) 2有边沿但坏(时序/波形) */
+uint16_t Stepper_TmcRaw16(void);              /* 最近读事务的前两字节回复(诊断: 0x05FF=芯片在回) */
+uint8_t  Stepper_TmcLineIdle(void);           /* PB15 线路空闲电平: 1=高(正常) 0=低(线被拉死/模块未上电) */
 
 #endif /* __STEPPER_MOTOR_H */

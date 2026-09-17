@@ -39,23 +39,11 @@ virtualFolder:
         - path: ../../module/ota_metadata_store.c
         - path: ../../module/ota_boot_request_store.c
         - path: ../../module/ota_staging.c
-        - path: ../../module/esp_at.c
-        - path: ../../module/esp_at.h
-        - path: ../../module/esp_http_bridge.c
-        - path: ../../module/esp_http_bridge.h
         - path: ../../module/esp_link.c
         - path: ../../module/esp_link.h
-        - path: ../../module/http_server.c
-        - path: ../../module/http_server.h
         - path: ../../module/mod_littlefs.h
         - path: ../../module/mod_ota.c
         - path: ../../module/mod_ota.h
-        - path: ../../module/mod_web_server.c
-        - path: ../../module/mod_web_server.h
-        - path: ../../module/mod_wifi_config.c
-        - path: ../../module/mod_wifi_config.h
-        - path: ../../module/mod_wifi_manager.c
-        - path: ../../module/mod_wifi_manager.h
         - path: ../../module/can_cluster.c
         - path: ../../module/can_cluster.h
         - path: ../../module/music_fw.c
@@ -69,8 +57,6 @@ virtualFolder:
         - path: ../../module/music_play.h
         - path: ../../module/ota_boot_request_store.h
         - path: ../../module/ota_display.h
-        - path: ../../module/ota_http.c
-        - path: ../../module/ota_http.h
         - path: ../../module/ota_metadata_store.h
         - path: ../../module/ota_staging.h
         - path: ../../module/ota_update_controller.c
@@ -203,6 +189,9 @@ targets:
       libList: []
     excludeList:
       - <virtual_root>/Module/music_fw.c
+      - <virtual_root>/Bootloader/bl_main.c
+      - <virtual_root>/Bootloader/bl_tft.c
+      - <virtual_root>/Bootloader/bl_esp01s.c
     settings:
       debugger: cortex-debug
     toolchain: AC5
@@ -361,9 +350,6 @@ targets:
       - <virtual_root>/BSP/bsp_ptc.c
       - <virtual_root>/BSP/bsp_font_store.c
       - <virtual_root>/BSP/bsp_ntc.c
-      - <virtual_root>/Module/http_server.c
-      - <virtual_root>/Module/esp_at.c
-      - <virtual_root>/Module/esp_http_bridge.c
       - <virtual_root>/Module/esp_link.c
       - <virtual_root>/Module/can_cluster.c
       - <virtual_root>/Module/music_fw.c
@@ -372,10 +358,8 @@ targets:
       - <virtual_root>/Module/music_play.c
       - <virtual_root>/Module/lang_ota.c
       - <virtual_root>/Module/ota_upload.c
-      - <virtual_root>/Module/ota_http.c
       - <virtual_root>/Module/ota_update_controller.c
       - <virtual_root>/Module/mod_wifi_manager.c
-      - <virtual_root>/Module/mod_web_server.c
       - <virtual_root>/Module/mod_ota.c
       - <virtual_root>/Module/mod_wifi_config.c
       - <virtual_root>/StdPeriph/stm32f10x_adc.c
@@ -544,12 +528,8 @@ targets:
       - <virtual_root>/Bootloader/upgrade_flag.c
       - <virtual_root>/Entry/main.c
       - <virtual_root>/Module/can_cluster.c
-      - <virtual_root>/Module/esp_at.c
-      - <virtual_root>/Module/esp_http_bridge.c
       - <virtual_root>/Module/esp_link.c
-      - <virtual_root>/Module/http_server.c
       - <virtual_root>/Module/mod_ota.c
-      - <virtual_root>/Module/mod_web_server.c
       - <virtual_root>/Module/mod_wifi_config.c
       - <virtual_root>/Module/mod_wifi_manager.c
       - <virtual_root>/Module/music_ota.c
@@ -558,7 +538,6 @@ targets:
       - <virtual_root>/Module/lang_ota.c
       - <virtual_root>/Module/ota_boot_request_store.c
       - <virtual_root>/Module/ota_display.c
-      - <virtual_root>/Module/ota_http.c
       - <virtual_root>/Module/ota_metadata_store.c
       - <virtual_root>/Module/ota_staging.c
       - <virtual_root>/Module/ota_update_controller.c

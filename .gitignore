@@ -44,3 +44,8 @@ project/MDK(V5)/remove_curve.py
 # ---- stray build byproducts ----
 project/MDK(V5)/C
 project/MDK(V5)/Project.code-workspace
+
+# ---- Kilo tool state ----
+.kilo/
+builder.params
+

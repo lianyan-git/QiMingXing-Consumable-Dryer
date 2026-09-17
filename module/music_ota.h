@@ -19,5 +19,13 @@ void    MusicOta_Poll(void);                    /* 推进 MusicStore 落盘 + �
 void    MusicOta_Abort(void);
 uint8_t MusicOta_Active(void);                  /* 1=正在接收/等待 0=空闲 */
 uint8_t MusicOta_Error(void);
+/* 调试计数（与 lang_ota 同构, 每次握手清零） */
+uint8_t  MusicOta_GotHand(void);
+uint16_t MusicOta_GetAck(void);
+uint16_t MusicOta_GetNak(void);
+uint32_t MusicOta_GetRecv(void);
+uint32_t MusicOta_GetTotal(void);
+uint8_t  MusicOta_GetState(void);
+uint8_t  MusicOta_GetFail(void);   /* 0无 1超时 2溢出 3Begin拒 4写盘失败 5帧/size非法 6END异常 7Finish失败 */
 
 #endif /* MUSIC_OTA_H */

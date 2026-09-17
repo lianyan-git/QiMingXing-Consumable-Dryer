@@ -29,10 +29,8 @@ uint8_t LangReady(void);
 int  LangGetGlyph(uint16_t unicode, uint8_t out[LANG_GLYPH_BYTES]);
 int  LangGetAscii(uint8_t ch, uint8_t out[5]);  /* ASCII 5x7 阳码(与内置 glyph_for 同格式) */
 
-/* 上传/更新字库 (提供 AB 交叠 + flag 原子切换): */
+/* 字库完整性: (上传链路 LangOta 直接走 SfudFlash 分步擦写, 这里只剩 flag 提交) */
 uint32_t LangTargetBase(void);          /* 下一个要写入的分区基址 */
-int  LangBeginWrite(uint32_t binLen);   /* 擦除目标区; 0=ok */
-int  LangWriteAt(uint32_t base, uint32_t offOffset, const uint8_t *buf, uint32_t len);
 int  LangMarkValid(uint32_t base);      /* 整包写完后回写完整 flag(物理有效) */
 
 #endif /* BSP_FONT_STORE_H */

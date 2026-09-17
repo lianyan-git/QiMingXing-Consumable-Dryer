@@ -13,6 +13,7 @@
 #include "system_config.h"
 #include "system_time.h"
 #include "bsp_esp_uart.h"
+#include "bsp_rgb_led.h"
 #include "pin_config.h"
 #include "can_cluster.h"
 #include "esp_link.h"
@@ -391,21 +392,43 @@ static void web_cmd(const char *line)
 }
 
 /* ---------- DATA 鎺ㄩ ---------- */
+/* item11: "temp":NN.N 形式的两位定点小数直写(负值含 '-'; 0.05 进位语义对齐 %f)
+   注意: 本工程推送温度/湿度均为 °C/% 非负, %f 的 "-0.0" 分支不可达, 故不特判负零 */
+static int fmt_num(char *s, int t)
+{
+    char *p = s;
+    if (t < 0) { *p++ = '-'; t = -t; }
+    {
+        int w = t / 10, f = t % 10;
+        if (w >= 100) *p++ = (char)('0' + (w / 100) % 10);
+        if (w >= 10)  *p++ = (char)('0' + (w / 10) % 10);
+        *p++ = (char)('0' + w % 10);
+        *p++ = '.';
+        *p++ = (char)('0' + f);
+    }
+    return (int)(p - s);
+}
+
 static void push_dev(const char *id, int run, float temp, float humi,
                      long wt, float ptc, uint32_t sec, uint32_t rem, int has_target)
 {
     long st = (long)g_sys.params.target_temp;
     long sp = (long)g_sys.params.ptc_max_temp;
+    /* item11: %.1f → fmt_num 定点直写(JSON 输出字节一致; 来源已是十分位值) */
+    char tf[16], hf[16], pf[16];
+    tf[fmt_num(tf, (int)(temp * 10.0f + (temp >= 0.0f ? 0.5f : -0.5f)))] = 0;
+    hf[fmt_num(hf, (int)(humi * 10.0f + (humi >= 0.0f ? 0.5f : -0.5f)))] = 0;
+    pf[fmt_num(pf, (int)(ptc * 10.0f + (ptc >= 0.0f ? 0.5f : -0.5f)))] = 0;
     if (has_target) {
         sprintf(s_out,
-            "{\"t\":\"DATA\",\"d\":{\"id\":\"%s\",\"run\":%s,\"can\":%s,\"setTemp\":%ld,\"setPtc\":%ld,\"temp\":%.1f,\"humi\":%.1f,\"wtG\":%ld,\"ptc\":%.1f,\"tH\":%lu,\"tM\":%lu,\"tS\":%lu,\"rem\":%lu}}",
-            id, run ? "true" : "false", (g_sys.params.can_enabled ? "true" : "false"), st, sp, temp, humi, wt, ptc,
+            "{\"t\":\"DATA\",\"d\":{\"id\":\"%s\",\"run\":%s,\"can\":%s,\"setTemp\":%ld,\"setPtc\":%ld,\"temp\":%s,\"humi\":%s,\"wtG\":%ld,\"ptc\":%s,\"tH\":%lu,\"tM\":%lu,\"tS\":%lu,\"rem\":%lu}}",
+            id, run ? "true" : "false", (g_sys.params.can_enabled ? "true" : "false"), st, sp, tf, hf, wt, pf,
             (unsigned long)(sec / 3600U), (unsigned long)((sec % 3600U) / 60U), (unsigned long)(sec % 60U),
             (unsigned long)rem);
     } else {
         sprintf(s_out,
-            "{\"t\":\"DATA\",\"d\":{\"id\":\"%s\",\"run\":%s,\"temp\":%.1f,\"humi\":%.1f,\"wtG\":%ld,\"ptc\":%.1f,\"tH\":%lu,\"tM\":%lu,\"tS\":%lu,\"rem\":%lu}}",
-            id, run ? "true" : "false", temp, humi, wt, ptc,
+            "{\"t\":\"DATA\",\"d\":{\"id\":\"%s\",\"run\":%s,\"temp\":%s,\"humi\":%s,\"wtG\":%ld,\"ptc\":%s,\"tH\":%lu,\"tM\":%lu,\"tS\":%lu,\"rem\":%lu}}",
+            id, run ? "true" : "false", tf, hf, wt, pf,
             (unsigned long)(sec / 3600U), (unsigned long)((sec % 3600U) / 60U), (unsigned long)(sec % 60U),
             (unsigned long)rem);
     }
@@ -637,6 +660,10 @@ void EspLink_Process(void)
     /* 鎺ユ敹婧㈠嚭鎭㈠嶏細鍐呴儴 Flash 鎿﹀啓鏈熼棿 CPU 琚 stall锛屽崟瀛楄妭 RX 浼氭孩鍑哄艰嚧
      * 琛岃鎴鏂銆傛娴嬪埌婧㈠嚭鍚庝涪寮冨綋鍓嶆畫琛屽苟澶嶄綅锛岄伩鍏嶅崱鍦ㄥ崐涓 JSON 涓娿 */
     if (EspUart_HasOverflow()) {
+        /* 上传中溢出=必有字节丢失: 整包 CRC 后补 NAK 只会让两边状态机半失步,
+         * 直接放弃本次传输并弹失败帧, 由用户重试(ESP 侧等不到 ACK 也会自行终止)。 */
+        if (MusicOta_Active()) { MusicOta_Abort(); g_sys.music_popup = 5; }
+        if (LangOta_Active())  { LangOta_Abort();  g_sys.lang_popup  = 5; }
         EspUart_ClearRx();
         s_li = 0;
     }
@@ -706,6 +733,8 @@ void EspLink_StartConfig(void)
 void EspLink_MusicOpenAp(void)
 {
     MusicOta_Abort();   /* 清理上一次可能的残留接收态, 保证行协议恢复 */
+    RGB_AllOff();       /* 上传前主动熄灯: 此刻 UART 无数据流(冷启动 ESP 已断电/在线等 AT 应答),
+                         * 关中断的灯带帧安全; 之后 update_rgb 在会话期间本就冻结 */
     if (s_state == ESPLINK_ONLINE) {
         /* WiFi 已在线: 直接发 MUSICAP 切 APSTA(AP+STA 共存), 不断 WiFi */
         s_pending_music = 0;
@@ -731,6 +760,7 @@ void EspLink_LangOpenAp(void)
 {
     MusicOta_Abort();
     LangOta_Abort();
+    RGB_AllOff();       /* 同音乐: 开 AP 前趁 UART 静默窗口熄灭灯带 */
     g_sys.lang_download_done = 0;
     if (s_state == ESPLINK_ONLINE) {
         s_pending_lang = 0;

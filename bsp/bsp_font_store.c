@@ -1,5 +1,6 @@
 ﻿#include "bsp_font_store.h"
 #include "sfud_flash.h"
+#include "system_time.h"
 #include <string.h>
 
 #define LANG_DICT_MAX 4096
@@ -26,15 +27,35 @@ static LangCtx_t s_lang;
 #define HDR_ASCII_OFF  22
 #define HDR_FLAG       26
 
-static void wait_idle(void)
+/* flash 忙等待带 5s 超时与错误传播(#3): 原实现无超时且忽略读返回值,
+ * SPI/Flash 异常会在"上传完成写 flag"处永久卡死主循环。 */
+static int wait_idle(void)
 {
     uint8_t sr1;
-    do { SfudFlash_ReadSR1(&sr1); } while (sr1 & 0x01U);
+    uint32_t t0 = SystemTime_Millis();
+    do {
+        if (SfudFlash_ReadSR1(&sr1) != 0) return -1;
+        if ((uint32_t)(SystemTime_Millis() - t0) > 5000U) return -1;
+    } while (sr1 & 0x01U);
+    return 0;
+}
+
+/* 头 30..33: 32 位代际号(serial)。修复 #1: 旧逻辑 A 恒优先, 上传写 B 提交后
+ * A 仍 READY → 重启回到旧字库, 新库永不生效。现给 Ready 标记随页写带 serial =
+ * max(A,B)+1; 两区都 READY 时取 serial 大者。旧库该区字段为擦除态 FF → 记 0。 */
+static uint32_t head_serial(uint32_t base)
+{
+    uint8_t h[36];
+    uint32_t s = 0;
+    if (SfudFlash_Read(base, h, sizeof(h)) != 0) return 0;
+    memcpy(&s, h + 30, 4);
+    if (s == 0xFFFFFFFFUL) return 0;
+    return s;
 }
 
 static uint32_t head_flag(uint32_t base)
 {
-uint8_t h[30];
+    uint8_t h[36];
     uint32_t magic, flag;
     if (SfudFlash_Read(base, h, sizeof(h)) != 0) return 0UL;
     memcpy(&magic, h + HDR_MAGIC, 4);
@@ -48,13 +69,16 @@ int LangInit(void)
     uint32_t a = head_flag(LANG_FLASH_A);
     uint32_t b = head_flag(LANG_FLASH_B);
     uint32_t base = 0;
-uint8_t h[30];
+    uint8_t h[36];
     uint32_t cjk, dict_tab;
     uint16_t dlen;
 
     memset(&s_lang, 0, sizeof(s_lang));
-    if (a == LANG_FLAG_READY)      base = LANG_FLASH_A;
-    else if (b == LANG_FLAG_READY) base = LANG_FLASH_B;
+    if (a == LANG_FLAG_READY && b == LANG_FLAG_READY) {
+        /* 双区都有效: 取代际号新者(修复上传后旧区压制新区的 BUG) */
+        base = (head_serial(LANG_FLASH_B) > head_serial(LANG_FLASH_A)) ? LANG_FLASH_B : LANG_FLASH_A;
+    } else if (a == LANG_FLAG_READY)      base = LANG_FLASH_A;
+    else if (b == LANG_FLAG_READY)        base = LANG_FLASH_B;
     if (base == 0) return -1;
 
     if (SfudFlash_Read(base, h, sizeof(h)) != 0) return -1;
@@ -118,39 +142,19 @@ uint32_t LangTargetBase(void)
     return LANG_FLASH_A;          /* 尚无字库: 写 A */
 }
 
-int LangBeginWrite(uint32_t binLen)
+/* 主修复 #1: 新区提交成功后把另一区 flag 清零失效。NOR 编程只能 1→0,
+ * 对任意当前态写 00 恒安全(读-改-写整页幂等), 不依赖 langgen 对保留区的填充。
+ * 失效后 LangInit 只剩一个 READY → 必然选中新库; serial 仅是并列崩溃窗口的次级保险。 */
+static int invalidate_other(uint32_t keep_base)
 {
-    uint32_t base = LangTargetBase();
-    uint32_t a;
-    (void)binLen;
-    if (base + LANG_REGION_SIZE > UINT32_C(0x01000000)) return -1;
-    for (a = 0; a < LANG_REGION_SIZE; a += 0x1000U) {
-        if (SfudFlash_StartEraseSector(base + a) != 0) return -1;
-        wait_idle();
-    }
-    return 0;
-}
-
-int LangWriteAt(uint32_t base, uint32_t off, const uint8_t *buf, uint32_t len)
-{
-    while (len) {
-        uint32_t n = (len > 256U) ? 256U : len;
-        const uint8_t *w = buf;
-        if (off < HDR_FLAG + 4U && off + n > HDR_FLAG) {
-            /* 头部 flag 区保留擦除态, 提交阶段才置有效 */
-            uint8_t p[256];
-            uint8_t k;
-            memcpy(p, buf, n);
-            for (k = 0; k < 4U; k++) {
-                uint32_t idx = HDR_FLAG - off + k;
-                if (idx < n) p[idx] = 0xFFU;
-            }
-            w = p;
-        }
-        if (SfudFlash_StartWritePage(base + off, w, n) != 0) return -1;
-        wait_idle();
-        off += n; buf += n; len -= n;
-    }
+    uint32_t other = (keep_base == LANG_FLASH_A) ? LANG_FLASH_B : LANG_FLASH_A;
+    uint8_t pg[256];
+    if (head_flag(other) == 0UL) return 0;            /* 本就无效/无魔数: 无需操作 */
+    if (SfudFlash_Read(other, pg, sizeof(pg)) != 0) return -1;
+    pg[26] = 0x00U; pg[27] = 0x00U; pg[28] = 0x00U; pg[29] = 0x00U;
+    pg[30] = 0x00U; pg[31] = 0x00U; pg[32] = 0x00U; pg[33] = 0x00U;
+    if (SfudFlash_StartWritePage(other, pg, sizeof(pg)) != 0) return -1;
+    (void)wait_idle();                                 /* 失效失败不反噬: 新库已 READY 可用 */
     return 0;
 }
 
@@ -159,13 +163,27 @@ int LangMarkValid(uint32_t base)
     uint8_t cur[4];
     uint8_t pg[256];
     uint32_t pg_addr = base + (HDR_FLAG & 0xFFFFFF00U);   /* 256B 对齐页 */
+    uint32_t serial;
     uint8_t i = (uint8_t)(HDR_FLAG & 0xFFU);
+    uint8_t fa, fb;
     if (SfudFlash_Read(base + HDR_FLAG, cur, 4) != 0) return -1;
     if (cur[0] != 0xFFU || cur[1] != 0xFFU || cur[2] != 0xFFU || cur[3] != 0xFFU) return -1;  /* flag 区须未被写 */
     if (SfudFlash_Read(pg_addr, pg, sizeof(pg)) != 0) return -1;
     /* LANG_FLAG_READY=0xA5A50001 小端存储: 低址字节在低地址 → 01 00 A5 A5 */
     pg[i] = 0x01U; pg[i + 1] = 0x00U; pg[i + 2] = 0xA5U; pg[i + 3] = 0xA5U;
+    fa = (head_flag(LANG_FLASH_A) == LANG_FLAG_READY) ? 1U : 0U;
+    fb = (head_flag(LANG_FLASH_B) == LANG_FLAG_READY) ? 1U : 0U;
+    {
+        uint32_t sa = fa ? head_serial(LANG_FLASH_A) : 0U;
+        uint32_t sb = fb ? head_serial(LANG_FLASH_B) : 0U;
+        serial = ((sa > sb) ? sa : sb) + 1U;
+    }
+    pg[30] = (uint8_t)(serial & 0xFFU);
+    pg[31] = (uint8_t)((serial >> 8) & 0xFFU);
+    pg[32] = (uint8_t)((serial >> 16) & 0xFFU);
+    pg[33] = (uint8_t)((serial >> 24) & 0xFFU);
     if (SfudFlash_StartWritePage(pg_addr, pg, sizeof(pg)) != 0) return -1;   /* 写页须 256B 对齐 */
-    wait_idle();
+    if (wait_idle() != 0) return -1;
+    (void)invalidate_other(base);                      /* #1: 旧区失效(尽力而为) */
     return 0;
 }

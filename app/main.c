@@ -20,8 +20,6 @@
 #include "bsp_ptc.h"
 #include "bsp_rgb_led.h"
 #include "bsp_stepper.h"
-#include "esp_at.h"
-#include "esp_http_bridge.h"
 #include "esp_link.h"
 #include "bsp_font_store.h"
 #include "can_cluster.h"
@@ -29,11 +27,6 @@
 #include "music_store.h"
 #include "music_ota.h"
 #include "lang_ota.h"
-#include "http_server.h"
-#include "ota_http.h"
-#include "ota_metadata_store.h"
-#include "ota_update_controller.h"
-#include "ota_upload.h"
 #include "mod_ota.h"
 #include "ui_manager.h"
 #include "pin_config.h"
@@ -47,7 +40,6 @@
 SystemState_t g_sys;
 
 #ifndef BOOTLOADER_BUILD
-static void refresh_api_data(void);
 static void read_sensors(void);
 static uint8_t s_rgb_ready = 0;   /* 屏渐亮完成后才允许 RGB 灯效（上电熄灯待命） */
 static void safety_check(void);
@@ -349,24 +341,6 @@ int main(void)
 #define TEMP_DROP_MARGIN          3.0f      /* 冷启动：跌破初始锚点 3℃ 判作箱体破损（ >3℃ 触发） */
 #define TEMP_HOT_DROP_DELTA       3.0f      /* 鐑鎬侊細宄板煎洖钀借秴杩 3鈩 鍒ょ变綋鐮存崯 */
 
-static void __attribute__((unused)) refresh_api_data(void)
-{
-    HttpApiData_t data;
-    OtaMetadata_t metadata;
-    memset(&data, 0, sizeof(data));
-    strcpy(data.app_version, APP_VERSION_TEXT);
-    strcpy(data.bootloader_version, BOOTLOADER_VERSION_TEXT);
-    data.ota_state = OTA_STATE_IDLE;
-    if (OtaMetadataStore_Load(&metadata, 0) == OTA_METADATA_STORE_OK) {
-        data.ota_state = (OtaState_t)metadata.state;
-        if ((metadata.state == (uint32_t)OTA_STATE_RECEIVING) && (OtaUpload_GetState() == OTA_UPLOAD_STATE_IDLE) && OtaUpload_IsStoragePrepared()) data.ota_state = OTA_STATE_IDLE;
-        data.staged_size = metadata.image_size;
-        data.staged_crc32 = metadata.image_crc32;
-        data.staged_crc_valid = (metadata.state == (uint32_t)OTA_STATE_READY) || (metadata.state == (uint32_t)OTA_STATE_APPLYING) || (metadata.state == (uint32_t)OTA_STATE_APPLIED);
-    }
-    HttpServer_SetApiData(&data);
-}
-
 static void read_sensors(void)
 {
     float temp, hum, weight;
@@ -425,7 +399,8 @@ static void read_sensors(void)
     /* 无效读数(-9999=转换未就绪)丢弃：保持上一显示值，不触发去皮 */
 
     ptc_raw = NTC_GetTemperature();
-    g_sys.ptc_temp = (float)ptc_raw / 10.0f;
+    if (ptc_raw >= NTC_READ_LO_10C && ptc_raw <= NTC_READ_HI_10C)
+        g_sys.ptc_temp = (float)ptc_raw / 10.0f;  /* 测量域外(含开/短路哨兵)不进状态(保持上一有效) */
 
     /* 称重温度分段补偿：电桥温漂使重量随温度漂移。以 25℃ 为基准，
      * 按当前 NTC(烘干舱/机体)温度查分段系数对重量修正。
@@ -443,14 +418,23 @@ static void read_sensors(void)
         }
     }
 
-    /* NTC 元件温度异常（ADC 满/零）判定：超过范围即判开路/短路，
-     * 烘干中若 NTC 无效则触发箱体破损安全告警并断电加热：
-     *   if (ptc_raw <= -100 || ptc_raw >= 2000) {
-     *       if (g_sys.drying_active && g_sys.safety_state == SAFETY_NONE) {
-     *           trigger_safety(SAFETY_BOX_BROKEN);
-     *       }
-     *   }
-     */
+    /* NTC 失效检查（与 SHT40 连续失败保护同构）：开路→NTC_ERR_OPEN、短路→NTC_ERR_SHORT
+     * 均为测量域外哨兵，与真实温度(含 120~160℃)永不混叠。
+     * 两级反应: ① g_sys.ntc_valid=0 → control_update 当拍即断加热+风扇满速
+     *            (不再依赖冻结的 ptc_temp 缓存);
+     *          ② 烘干中持续约 2s → trigger_safety 升级成正式安全故障。 */
+    {
+        static uint8_t ntc_fail = 0;
+        g_sys.ntc_valid = (ptc_raw >= NTC_READ_LO_10C && ptc_raw <= NTC_READ_HI_10C) ? 1U : 0U;
+        if (!g_sys.ntc_valid) {
+            if (g_sys.drying_active && ++ntc_fail >= 20) {
+                ntc_fail = 0;
+                trigger_safety(SAFETY_BOX_BROKEN);  /* 传感器故障无法可信控温, 走加热失效安全停机 */
+            }
+        } else {
+            ntc_fail = 0;
+        }
+    }
 }
 
 static void update_rgb(void)
@@ -458,6 +442,16 @@ static void update_rgb(void)
 /* 上电开屏前保持灯条熄灭：背光渐亮（s_rgb_ready=1）后才开始走灯效，
  * 避免"屏幕还黑着灯条就先亮起"像突然通电一样。 */
     if (!s_rgb_ready) return;    /* 背光渐亮前灯条保持熄灭 */
+    /* WS2812 位带码发送全程关中断(1颗~120us, 7~8颗~350-410us): 115200bps 下行字节
+     * 每 87us 一个, 音乐/字库上传的字节流必然随机撞进窗口 → 两字节撞同一 RXNE
+     * 产生 ORE 丢 1 字节。丢在帧体里 FSM 只会干等(所以历史表现为"零 NAK、盲重发、
+     * 卡11%/14%/有概率失败"——正是这个签名)。会话期间冻结灯效(灯停在最后一帧),
+     * 上传结束/失败即恢复; 溢出中止仍保留作兜底。
+     * 条件含弹窗 2/3(热点等待/上传中): 握手 0x11 字节到达时会话尚未激活,
+     * 只判 Active 会漏掉握手瞬间——那时灯效若正在跑同样会吃掉握手帧。 */
+    if (MusicOta_Active() || LangOta_Active() ||
+        g_sys.music_popup == 2 || g_sys.music_popup == 3 ||
+        g_sys.lang_popup == 2 || g_sys.lang_popup == 3) return;
     if (!g_sys.light_switch) {
         RGB_AllOff();
         return;
@@ -518,10 +512,18 @@ static void trigger_safety(SafetyState_t state)
     g_sys.current_screen = SCREEN_SAFETY_ALERT;
 }
 
+/* 停止保护窗: 刚 Stop/Pause/安全触发后的 1.5s 内拒绝任何 start
+ * (吞掉重复按键事件/网页重复 RUN 指令/CAN 重发, 防止"关烘干→又变加热") */
+static uint32_t s_stop_guard_ms = 0;
+static void stop_guard_arm(void) { s_stop_guard_ms = SystemTime_Millis(); }
+
 void StartDrying(void)
 {
     /* 安全告警未确认清除时禁止启动烘干, 杜绝"关闭反而加热"的 toggle 反转 */
     if (g_sys.safety_state != SAFETY_NONE) return;
+    if (s_stop_guard_ms != 0U &&
+        (uint32_t)(SystemTime_Millis() - s_stop_guard_ms) < 1500U) return;
+    s_stop_guard_ms = 0;
     pid_reset();
     g_sys.drying_active = 1;
     g_sys.run_state = STATE_HEATING;
@@ -542,6 +544,7 @@ void StartDrying(void)
 void StopDrying(void)
 {
     pid_reset();
+    stop_guard_arm();
     g_sys.drying_active = 0;
     g_sys.run_state = STATE_COOLING;
     g_sys.safety_state = SAFETY_NONE;        /* 手动停止视为用户主动取消, 清除残留安全状态 */
@@ -555,6 +558,7 @@ void PauseDrying(void)
 {
     if (g_sys.run_state != STATE_HEATING && g_sys.run_state != STATE_DRYING) return;
     pid_reset();
+    stop_guard_arm();
     g_sys.run_state = STATE_PAUSED;
     PTC_SetPower(0);
     Fan_SetSpeed(100);
@@ -669,24 +673,38 @@ static void pid_reset(void)
 /* 通用 PID 步进：输出 0-100 百分比（setpoint=目标，measure=被测温）。
  * 反积分饱和(back-calculation)：输出到顶/底时把超出量立即从积分卸掉——
  * 否则升温段积分积到 +50，元件到达 ptc_max 后仍被残余积分推着多烧（实测冲到 95℃），
- * 并在限制附近 0→25% 反复横跳。卸积分后接近限值功率平滑归零。 */
+ * 并在限制附近 0→25% 反复横跳。卸积分后接近限值功率平滑归零。
+ * D 项按"测量值微分"而非"误差微分"：恒温稳定带 air_sp 每跨 0.5℃ 会把误差阶跃 ±0.5,
+ * 误差微分把它放大成一次性方向相反的功率踢击(kd×0.5/dt), 表现为"已到目标仍偶发加热"
+ * (有概率、温度在 ±0.5℃ 带上被噪声反复跨界)。测量微分只随真实温升/温降作用,
+ * 设定切换不产生踢击; 常规工况(设定恒定)两者等价。prev 现存上一拍测量值。 */
 static uint8_t pid_step(float *integral, float *prev, uint32_t *tick,
                         uint32_t now, float setpoint, float measure,
                         float kp, float ki, float kd)
 {
     uint8_t first = (*tick == 0U);
     float dt = first ? 0.2f : (float)(now - *tick) / 1000.0f;
-    float err, der, out;
+    float err, der, dterm, out;
     if (dt <= 0.0f || dt > 1.0f) dt = 0.2f;
-    err = setpoint - measure;
-    der = first ? 0.0f : (err - *prev) / dt;
-    *prev = err;
+    /* 测量一阶低通(MF_K=0.4)后再取微分: 传感器 0.01~0.1 量化的相邻拍抖动
+     * (0.1℃/0.2s=0.5℃/s)乘上校准出的大 kd 会放大成百 % 的随机 D 尖峰,
+     * 表现为"已到目标仍有概率满功率加热/未到仍有概率停热"的反向跳变。
+     * prev 现存"滤波后测量值"(首拍直接播种)。 */
+    {
+        float mf = first ? measure : (*prev) + 0.40f * (measure - *prev);
+        err = setpoint - measure;
+        der = first ? 0.0f : ((*prev) - mf) / dt;
+        *prev = mf;
+    }
     *tick = now;
+    dterm = kd * der;
+    if (dterm >  25.0f) dterm =  25.0f;   /* D 贡献限幅(功率%), 只保留制动/预减作用 */
+    if (dterm < -25.0f) dterm = -25.0f;
 
     *integral += err * dt;
     if (*integral > 50.0f) *integral = 50.0f;
     if (*integral < -50.0f) *integral = -50.0f;
-    out = kp * err + ki * (*integral) + kd * der;
+    out = kp * err + ki * (*integral) + dterm;
     if (ki > 0.0001f) {
         if (out > 100.0f) { *integral -= (out - 100.0f) / ki; out = 100.0f; }
         else if (out < 0.0f) { *integral -= out / ki; out = 0.0f; }
@@ -737,6 +755,27 @@ static void control_update(void)
 
     if (g_sys.safety_state != SAFETY_NONE) { PTC_SetPower(0); return; }
 
+    /* item1(P0): NTC 当前拍异常 → 本拍立即断加热+风扇满速, 不等 2s。
+     * g_sys.ptc_temp 在域外时是"冻结的最后有效值"(如 70℃), 若安全链只信缓存,
+     * 存在"显示 70℃、实际失控升温"的时间窗。read_sensors 每拍先于本函数执行,
+     * ntc_valid 即当前拍判定; "持续 2s" 只负责升级为正式安全告警(read_sensors 计数)。 */
+    if (!g_sys.ntc_valid && g_sys.drying_active) {
+        PTC_SetPower(0);
+        Fan_SetSpeed(100);
+        return;
+    }
+
+    /* 绝对过热闸(兜底): 元件温度 ≥ 硬件上限 160℃ 无条件断功率。
+     * item2: 过了上方 ntc_valid 闸后, ptc_temp 必为本拍域内真实读数
+     * (域外不覆盖缓存 + 域外已被拦截) → 缓存值 ≡ 当前 NTC, 无需二次 ADC。
+     * 覆盖正常烘干所有分支——即使 PID 失序导致 ptc_max+10 软顶没生效也不烧穿。
+     * 统一 >= 语义: 159.9 正常 / 160.0 起断(P0)。自动校准有独立闸(自读直判),不拦截。
+     * 必须 return: 否则落入下方 switch 会重新 PTC_SetPower(pwr) 把加热打开。 */
+    if (g_sys.ptc_temp >= (float)PTC_TEMP_MAX) {
+        PTC_SetPower(0);
+        return;
+    }
+
     switch (g_sys.run_state) {
     case STATE_HEATING:
     case STATE_DRYING: {
@@ -745,9 +784,13 @@ static void control_update(void)
         /* 烘干：空气 PID（随 SHT40 空气温度）控制功率，误差大时满速 100% 快速升温；
          * NTC PID（元件温度保护）当元件温度接近 ptc_max_temp 时收功率，防止 PTC 过温；
          * PTC 取两者较小值：即使空气未达标，元件温度高时也只按保护限功率工作 */
-        /* stable band: pull temperature back into [target-0.5, target+0.5] */
+        /* 稳定带修正(用户要求: 允许低于设定值, 在设定下方 0~1℃ 区间工作,
+         * 消除"接近设定就稍微导通"): 温度 ≥ target-0.3 就把目标压到 target-1.0
+         * → 功率立即归零, 风扇自然降温; 掉到 target-1.0 以下再恢复向上限加热。
+         * 两档相隔 0.7℃ 不 chatter; 上沿 -0.3 仍高于 HEATING→DRYING 的
+         * (target-0.5) 判定, 预热转恒温不受影响。 */
         float air_sp = target;
-        if (g_sys.current_temp > target + 0.5f) air_sp = target - 0.5f;
+        if (g_sys.current_temp >= target - 0.3f) air_sp = target - 1.0f;
         uint8_t p_air = pid_step(&pid_air_int, &pid_air_prev, &pid_air_tick,
                                  now, air_sp, g_sys.current_temp,
                                  g_sys.params.pid_air_kp, g_sys.params.pid_air_ki, g_sys.params.pid_air_kd);
@@ -766,7 +809,11 @@ static void control_update(void)
             g_sys.run_state = STATE_DRYING;   /* 空气达到目标，切换恒温烘干阶段 */
             last_tick = now;
         }
-        if (g_sys.run_state == STATE_DRYING) {
+        {
+            /* 临时改动(2026-09-17, 用户要求): HEATING/DRYING 两阶段都直接走倒计时——
+             * 温湿度传感器摆放有偏差、可能长时间达不到目标温度, 原逻辑只在到温后
+             * 才计时, 会无限烘干。摆放位置修正后如需"到温才计时",
+             * 把本块条件恢复为 if (g_sys.run_state == STATE_DRYING)。 */
             /* 倒计时：固定步进 +1000ms 并结转余量。
              * 原逻辑 last_tick = now 每秒丢 0~(tick周期) 的不足一秒余数，
              * 长时间运行倒计时明显偏慢；>5s 台阶（暂停等）才重新锚定，不连扣补偿。 */
